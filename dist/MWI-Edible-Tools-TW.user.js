@@ -2,7 +2,7 @@
 // @name         MWI 食用工具（隊伍順序修正版）
 // @name:en      MWI Edible Tools - Party Order Fix
 // @namespace    http://tampermonkey.net/
-// @version      0.509.1
+// @version      0.509.2
 // @description  保留原版食用工具功能，修正多人戰鬥消耗品視窗的角色順序，使其與遊戲隊伍卡由左至右一致。
 // @description:en  Chest log, chest value, offline stats, guild XP, food monitor, drop tracking, enhancement stats
 // @author       Truth_Light
@@ -3827,6 +3827,7 @@
         battlePlayerLootButton.addEventListener('click', function() {
             const isMobile = window.innerWidth < 768; // 判断是否为移动设备
             const playerCount = Object.keys(battlePlayerLoot).length;
+            const playerDisplayOrder = getBattlePlayerDisplayOrder();
             let maxItemsToShow = 10; // 默认显示10个物品
             const EPH = (60 * 60 * (battleRunCount - 1) / battleDuration)
 
@@ -3896,7 +3897,7 @@
 
             // 获取所有玩家的总计价格
             let playerPrices = [];
-            for (let player in battlePlayerLoot) {
+            for (const player of playerDisplayOrder) {
                 let totalPrice = 0;
                 let lootItems = battlePlayerLoot[player];
                 for (let item in lootItems) {
@@ -3915,7 +3916,7 @@
             }
             const diffTier = battleDifficultyTier || 0;
             // 显示高价值物品
-            for (let player in battlePlayerLoot) {
+            for (const player of playerDisplayOrder) {
                 const PlayerBonusData = battlePlayerData[player];
                 const playerExpectDrops = {};
 
@@ -4633,7 +4634,7 @@
     GM_registerMenuCommand('打印掉落物列表', function() {
         let dataHtml = '<div style="display: flex; flex-wrap: nowrap;">';
         const minPrice = 10000;
-        for (let player in battlePlayerLoot) {
+        for (const player of getBattlePlayerDisplayOrder()) {
             let totalPrice = 0;
             dataHtml += `<div style="flex: 1 0 auto; min-width: 6.25rem; margin: 0.625rem; padding: 0.625rem; border: 0.0625rem solid black;">`;
             dataHtml += `<h3>${player}</h3>`;
