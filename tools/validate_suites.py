@@ -21,6 +21,10 @@ EXPECTED = {
         "modules": 4,
         "license": "CC-BY-NC-SA-4.0",
     },
+    "MWI-Edible-Tools-TW.user.js": {
+        "modules": 0,
+        "license": "CC-BY-NC-SA-4.0",
+    },
 }
 
 FORBIDDEN = (
@@ -109,4 +113,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
