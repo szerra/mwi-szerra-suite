@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI 戰鬥技能特效
 // @namespace    codex.local.mwi.combat-vfx
-// @version      0.1.8
+// @version      0.1.9
 // @description  攻擊讀條時在手前方顯示法陣，彈道同步命中，並把怪物狀態與全隊光環依實際持續時間附著在角色上。
 // @author       Local build for gzerr
 // @license      MIT
@@ -18,12 +18,12 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.1.8";
-  const CANVAS_ID = "mwiCombatVfxCanvas018";
+  const VERSION = "0.1.9";
+  const CANVAS_ID = "mwiCombatVfxCanvas019";
   const WS_HOSTS = ["api.milkywayidle.com/ws", "api-test.milkywayidle.com/ws"];
 
-  if (window.__mwiCombatVfx018Installed) return;
-  window.__mwiCombatVfx018Installed = true;
+  if (window.__mwiCombatVfx019Installed) return;
+  window.__mwiCombatVfx019Installed = true;
 
   const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -254,7 +254,14 @@
 
   function unitAnchor(unit, towardX = null) {
     if (!unit) return null;
-    const model = unit.querySelector('[class*="CombatUnit_unitIconContainer"], [class*="CombatUnit_model"]') || unit;
+    // Grouped querySelector follows DOM order, so the outer 120px model wrapper used
+    // to win over the inner monster icon.  That wrapper also contains the tier and
+    // action row, which made ground effects land on the skill label.  Prefer the
+    // actual visible icon explicitly and only fall back to the wrapper.
+    const model = unit.querySelector('[class*="CombatUnit_unitIconContainer"]')
+      || unit.querySelector('[class*="CombatUnit_monsterIcon"]')
+      || unit.querySelector('[class*="CombatUnit_model"]')
+      || unit;
     const modelRect = model.getBoundingClientRect();
     const unitRect = unit.getBoundingClientRect();
     let x = modelRect.left + modelRect.width / 2;
@@ -268,6 +275,23 @@
       groundY: Math.min(unitRect.bottom - 12, modelRect.bottom - 4),
       width: modelRect.width,
       height: modelRect.height
+    };
+  }
+
+  function targetBodyPoint(target, yOffset = 0) {
+    return {
+      x: target.point.x,
+      y: target.point.y + yOffset
+    };
+  }
+
+  function targetGroundPoint(target) {
+    const anchor = target.anchor || {};
+    const height = Number.isFinite(anchor.height) ? anchor.height : 90;
+    const fallback = target.point.y + clamp(height * 0.44, 24, 42);
+    return {
+      x: target.point.x,
+      y: Number.isFinite(anchor.groundY) ? Math.min(anchor.groundY, fallback) : fallback
     };
   }
 
@@ -698,20 +722,14 @@
       const sorted = targets.map(t => t.point).sort((a, b) => a.x - b.x);
       const left = sorted[0];
       const right = sorted[sorted.length - 1];
-      const span = Math.max(80, right.x - left.x + 74);
-      const center = { x: (left.x + right.x) / 2, y: (left.y + right.y) / 2 + (mode === "cripplingSlash" ? 18 : 3) };
+      const centerY = sorted.reduce((sum, point) => sum + point.y, 0) / sorted.length;
+      const start = { x: left.x - 38, y: centerY + (mode === "cripplingSlash" ? 26 : 18) };
+      const end = { x: right.x + 38, y: centerY + (mode === "cripplingSlash" ? 26 : 18) };
+      const control = { x: (left.x + right.x) / 2, y: centerY - (mode === "sweep" ? 26 : 34) };
       const progress = easeOut(clamp((p - 0.25) / 0.35));
-      ctx.save();
-      ctx.globalCompositeOperation = "lighter";
-      ctx.strokeStyle = rgba(effect.profile.color, alpha);
-      ctx.shadowColor = rgba(effect.profile.color, alpha);
-      ctx.shadowBlur = 15;
-      ctx.lineCap = "round";
-      ctx.lineWidth = mode === "sweep" ? 7 : 5;
-      ctx.beginPath();
-      ctx.arc(center.x, center.y + 32, span * 0.52, Math.PI * 1.12, Math.PI * (1.12 + 0.76 * progress));
-      ctx.stroke();
-      ctx.restore();
+      const points = [];
+      for (let i = 0; i <= 28; i++) points.push(qBezier(start, control, end, progress * i / 28));
+      pathGlow(points, effect.profile.color, alpha, mode === "sweep" ? 4.2 : 3.2, mode === "sweep" ? 13 : 11);
       for (const target of targets) {
         if (p > 0.50) impactRing(target.point, p, effect.profile.color, effect.seed + target.index * 11, 30);
         if (mode === "cripplingSlash" && p > 0.58) drawDownGlyph(target.point, p, COLORS.purple);
@@ -821,7 +839,7 @@
     const local = clamp((p - 0.34) / 0.5);
     const alpha = fadeOut(local, 0.7);
     for (const target of effect.targets) {
-      const ground = { x: target.point.x, y: target.anchor.groundY };
+      const ground = targetGroundPoint(target);
       discGlow(ground.x, ground.y, 12 + 20 * local, effect.profile.color, alpha * 0.8);
       for (let i = 0; i < 8; i++) {
         const angle = rand(effect.seed + target.index, i) * Math.PI * 2;
@@ -871,7 +889,8 @@
         const fall = easeOut(clamp((local - delay) / 0.45));
         const x = target.point.x + (rand(effect.seed + target.index, i) - 0.5) * 72;
         const startY = target.point.y - 135 - rand(effect.seed + 4, i) * 45;
-        const endY = target.anchor.groundY - rand(effect.seed + 8, i) * 10;
+        const bodySpread = Math.min(34, target.anchor.height * 0.38);
+        const endY = target.point.y + (rand(effect.seed + 8, i) - 0.5) * bodySpread;
         const y = lerp(startY, endY, fall);
         drawArrowGlyph({ x, y }, Math.PI / 2, COLORS.silver, alpha, 0.7);
         if (fall > 0.92) discGlow(x, endY, 4, COLORS.cyan, alpha * 0.8);
@@ -1007,7 +1026,10 @@
     const erupt = easeOut(clamp((p - 0.34) / 0.34));
     const alpha = fadeOut(p, 0.82);
     for (const target of effect.targets) {
-      magicCircle(target.anchor, effect.profile.color, ready, -p * 7 - target.index, 31);
+      const body = targetBodyPoint(target);
+      // This is an impact lock around the monster body, not a floor casting circle.
+      // The attack casting circle already appears in front of the caster's hand.
+      ellipseGlow(body.x, body.y, 17 + ready * 12, 22 + ready * 15, effect.profile.color, ready * 0.42, 1.25, -p * 2.4 - target.index);
       if (mode === "frostSurge") drawIceEruption(target, erupt, alpha, effect.seed);
       if (mode === "manaSpring") drawManaFountain(effect, target, erupt, alpha);
       if (mode === "toxicPollen") drawToxicDust(target, erupt, alpha, effect.seed);
@@ -1019,10 +1041,12 @@
   }
 
   function drawIceEruption(target, progress, alpha, seed) {
+    const center = targetBodyPoint(target, 5);
+    const baseY = center.y + clamp(target.anchor.height * 0.14, 10, 16);
+    discGlow(center.x, center.y, 8 + progress * 12, COLORS.ice, alpha * 0.72);
     for (let i = 0; i < 9; i++) {
-      const x = target.point.x + (i - 4) * 7 + (rand(seed + target.index, i) - 0.5) * 4;
-      const baseY = target.anchor.groundY;
-      const height = progress * (30 + rand(seed + 5, i) * 48);
+      const x = center.x + (i - 4) * 6 + (rand(seed + target.index, i) - 0.5) * 4;
+      const height = progress * (24 + rand(seed + 5, i) * 42);
       ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.fillStyle = rgba(COLORS.ice, alpha * 0.62); ctx.strokeStyle = rgba([235, 253, 255], alpha); ctx.shadowColor = rgba(COLORS.ice, alpha); ctx.shadowBlur = 9;
       ctx.beginPath(); ctx.moveTo(x - 4, baseY); ctx.lineTo(x, baseY - height); ctx.lineTo(x + 4, baseY); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
     }
@@ -1030,7 +1054,7 @@
   }
 
   function drawManaFountain(effect, target, progress, alpha) {
-    const base = { x: target.point.x, y: target.anchor.groundY };
+    const base = targetGroundPoint(target);
     for (let i = 0; i < 7; i++) {
       const offset = (i - 3) * 6;
       const height = progress * (45 + Math.abs(i - 3) * -4);
@@ -1066,7 +1090,8 @@
   }
 
   function drawLavaEruption(target, progress, alpha, seed) {
-    const base = { x: target.point.x, y: target.anchor.groundY };
+    const base = targetBodyPoint(target, 7);
+    discGlow(base.x, base.y, 10 + progress * 15, COLORS.fire, alpha * 0.76);
     for (let i = 0; i < 9; i++) {
       const angle = lerp(-Math.PI * 0.88, -Math.PI * 0.12, i / 8);
       const distance = progress * (28 + rand(seed + target.index, i) * 48);
@@ -1077,13 +1102,19 @@
 
   function drawFirestorm(target, p, alpha, seed) {
     const local = easeOut(clamp((p - 0.28) / 0.48));
+    const center = targetBodyPoint(target, 4);
+    const ground = targetGroundPoint(target);
+    ellipseGlow(ground.x, ground.y, 19 + local * 24, 5 + local * 6, COLORS.fire, alpha * 0.42, 1.3, p * 2.2);
     for (let ring = 0; ring < 3; ring++) {
       const points = [];
       for (let i = 0; i <= 30; i++) {
         const q = i / 30;
         const angle = q * Math.PI * 2.3 + p * 8 + ring * 1.7;
         const radius = (18 + ring * 12) * local * (0.7 + q * 0.3);
-        points.push({ x: target.point.x + Math.cos(angle) * radius, y: target.anchor.groundY - q * (45 + ring * 7) + Math.sin(angle) * radius * 0.22 });
+        points.push({
+          x: center.x + Math.cos(angle) * radius,
+          y: center.y - (q - 0.42) * (36 + ring * 6) + Math.sin(angle) * radius * 0.42
+        });
       }
       pathGlow(points, ring === 1 ? COLORS.gold : COLORS.fire, alpha * (0.72 - ring * 0.12), 2.5 + ring, 13);
     }
@@ -1119,7 +1150,7 @@
       const travel = easeInOut(clamp((p - 0.17) / 0.38));
       const trailAlpha = fadeOut(p, 0.76);
       const source = { x: effect.start.x, y: effect.start.y };
-      const end = { x: target.point.x, y: target.anchor.groundY - 10 };
+      const end = targetBodyPoint(target, clamp(target.anchor.height * 0.18, 10, 18));
 
       for (let strand = 0; strand < 3; strand++) {
         const phase = effect.seed * 0.07 + strand * 2.15;
@@ -1155,7 +1186,7 @@
       const bind = easeOut(clamp((p - 0.47) / 0.32));
       const bindAlpha = fadeOut(p, 0.87);
       if (bind <= 0 || bindAlpha <= 0) continue;
-      const ground = { x: target.point.x, y: target.anchor.groundY };
+      const ground = targetGroundPoint(target);
       ellipseGlow(ground.x, ground.y, 13 + bind * 24, 4 + bind * 6, [176, 238, 57], bindAlpha * 0.74, 1.05, p * 1.4);
       ellipseGlow(ground.x, ground.y, 8 + bind * 15, 2 + bind * 4, COLORS.green, bindAlpha * 0.64, 0.8, -p * 1.8);
 
@@ -1673,7 +1704,10 @@
     const sourceAnchor = unitAnchor(player, firstTargetRect.left + firstTargetRect.width / 2);
     if (!sourceAnchor) return;
     const targets = selected.map(hit => {
-      const anchor = unitAnchor(hit.element, sourceAnchor.x);
+      // towardX is only for placing the attack origin on the caster's facing
+      // side.  Shifting the receiver made every projectile and AOE land on the
+      // near edge of the portrait instead of the character body.
+      const anchor = unitAnchor(hit.element);
       const missDirection = Math.sign(anchor.x - sourceAnchor.x) || 1;
       return {
         index: hit.index,
@@ -1717,7 +1751,7 @@
     const firstRect = validHits[0].element.getBoundingClientRect();
     const sourceAnchor = unitAnchor(monster, firstRect.left + firstRect.width / 2);
     const targets = validHits.map(hit => {
-      const anchor = unitAnchor(hit.element, sourceAnchor.x);
+      const anchor = unitAnchor(hit.element);
       return { index: hit.index, damage: hit.damage, anchor, point: { x: anchor.x, y: anchor.y } };
     });
     const profile = { style: "enemyAttack", color: COLORS.enemy, duration: 760 };
