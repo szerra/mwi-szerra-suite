@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI 戰鬥技能特效
 // @namespace    codex.local.mwi.combat-vfx
-// @version      0.1.9
+// @version      0.1.10
 // @description  攻擊讀條時在手前方顯示法陣，彈道同步命中，並把怪物狀態與全隊光環依實際持續時間附著在角色上。
 // @author       Local build for gzerr
 // @license      MIT
@@ -18,12 +18,15 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.1.9";
-  const CANVAS_ID = "mwiCombatVfxCanvas019";
+  const VERSION = "0.1.10";
+  const CANVAS_ID = "mwiCombatVfxCanvas0110";
   const WS_HOSTS = ["api.milkywayidle.com/ws", "api-test.milkywayidle.com/ws"];
+  const HP_TRAIL_CLASS = "mwiCombatVfxHpTrail";
+  const HP_TRAIL_DELAY = 300;
+  const HP_TRAIL_DURATION = 500;
 
-  if (window.__mwiCombatVfx019Installed) return;
-  window.__mwiCombatVfx019Installed = true;
+  if (window.__mwiCombatVfx0110Installed) return;
+  window.__mwiCombatVfx0110Installed = true;
 
   const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -250,6 +253,69 @@
   function isVisible(element) {
     const rect = element.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
+  }
+
+  function parseDisplayedMaxHp(valueElement) {
+    const text = valueElement?.textContent || "";
+    const separator = text.lastIndexOf("/");
+    if (separator < 0) return NaN;
+    const numeric = text.slice(separator + 1).replace(/[^0-9.-]/g, "");
+    return Number(numeric);
+  }
+
+  // Restored from MWI-Hit-Tracker-Canvas (Artintel, BKN46, MIT), adapted to
+  // hashed class names and the current grid-based Milky Way Idle HP bar.
+  function addDamageHpTrail(unit, previousHp, currentHp) {
+    if (!unit || !(previousHp > currentHp) || currentHp < 0) return;
+    const hpBar = unit.querySelector('[class*="HitpointsBar_hitpointsBar"]');
+    const hpFront = hpBar?.querySelector('[class*="HitpointsBar_currentHp"]');
+    const hpValue = hpBar?.querySelector('[class*="HitpointsBar_hpValue"]');
+    if (!hpBar || !hpFront || !hpValue) return;
+
+    const maxHp = parseDisplayedMaxHp(hpValue);
+    if (!(maxHp > 0)) return;
+    const fromRatio = clamp(previousHp / maxHp);
+    const toRatio = clamp(currentHp / maxHp);
+    if (!(fromRatio > toRatio)) return;
+
+    const trail = document.createElement("div");
+    trail.className = `${hpFront.className} ${HP_TRAIL_CLASS}`;
+    Object.assign(trail.style, {
+      background: "var(--color-warning, rgb(255, 91, 91))",
+      width: `${hpFront.offsetWidth || hpBar.clientWidth}px`,
+      height: `${hpFront.offsetHeight || hpBar.clientHeight}px`,
+      transformOrigin: "left center",
+      transform: `scaleX(${fromRatio})`,
+      transition: `transform ${HP_TRAIL_DURATION}ms ease-in-out`,
+      pointerEvents: "none"
+    });
+
+    if (window.getComputedStyle(hpBar).display.includes("grid")) {
+      trail.style.gridArea = "1 / 1";
+      trail.style.zIndex = "0";
+      hpFront.style.zIndex = "1";
+      hpValue.style.zIndex = "2";
+    } else {
+      if (window.getComputedStyle(hpBar).position === "static") hpBar.style.position = "relative";
+      trail.style.position = "absolute";
+      trail.style.top = "0";
+      trail.style.left = "0";
+      trail.style.zIndex = "0";
+      hpFront.style.position = "relative";
+      hpFront.style.zIndex = "1";
+      hpValue.style.position = "relative";
+      hpValue.style.zIndex = "2";
+    }
+
+    hpBar.insertBefore(trail, hpFront);
+    window.setTimeout(() => {
+      if (trail.isConnected) trail.style.transform = `scaleX(${toRatio})`;
+    }, HP_TRAIL_DELAY);
+    window.setTimeout(() => trail.remove(), HP_TRAIL_DELAY + HP_TRAIL_DURATION + 50);
+  }
+
+  function clearDamageHpTrails() {
+    document.querySelectorAll(`.${HP_TRAIL_CLASS}`).forEach(element => element.remove());
   }
 
   function unitAnchor(unit, towardX = null) {
@@ -2021,21 +2087,17 @@
     return typeof value === "string" && value ? value : "autoAttack";
   }
 
-  function chooseMissTarget(counter) {
+  function choosePrimaryMonsterTarget() {
     const alive = [];
     for (let index = 0; index < monsterHp.length; index++) {
       if (monsterHp[index] > 0) alive.push(index);
     }
-    if (!alive.length) {
-      const { monsters } = findCombatUnits();
-      for (let index = 0; index < monsters.length; index++) alive.push(index);
-    }
     if (!alive.length) return -1;
-    return alive[Math.abs(numberOr(counter, 0)) % alive.length];
+    return alive[0];
   }
 
-  function spawnMissedPlayerAttack(cast) {
-    const targetIndex = chooseMissTarget(cast.counter);
+  function spawnMissedPlayerAttack(cast, preferredTargetIndex = -1) {
+    const targetIndex = preferredTargetIndex >= 0 ? preferredTargetIndex : choosePrimaryMonsterTarget();
     if (targetIndex >= 0) {
       spawnPlayerAttack(cast.index, cast.abilityHrid, [{ index: targetIndex, damage: 0, miss: true }], false);
     }
@@ -2064,6 +2126,7 @@
 
     if (obj.type === "new_battle" && Array.isArray(obj.monsters) && Array.isArray(obj.players)) {
       battleGeneration++;
+      clearDamageHpTrails();
       monsterHp = obj.monsters.map(monster => numberOr(monster.currentHitpoints, 0));
       monsterMp = obj.monsters.map(monster => numberOr(monster.currentManapoints, 0));
       monsterAtkCounter = obj.monsters.map(monster => numberOr(monster.attackAttemptCounter, 0));
@@ -2099,6 +2162,11 @@
     const monsterEntries = Object.entries(mMap);
     const playerEntries = Object.entries(pMap);
     if (!monsterEntries.length && !playerEntries.length) return;
+
+    // Player single-target attacks focus the first monster that was alive when
+    // the server processed this update.  Capture it before applying the new HP
+    // values, otherwise a killing blow would incorrectly jump to the next unit.
+    const primaryMonsterIndexBeforeUpdate = choosePrimaryMonsterTarget();
 
     const now = performance.now();
     for (const [index, cast] of pendingMonsterCasts) {
@@ -2156,6 +2224,8 @@
     }
 
     const monsterHits = [];
+    const monsterSplats = [];
+    const combatUnits = findCombatUnits();
     for (const [key, monster] of monsterEntries) {
       const index = Number(key);
       const previousHp = monsterHp[index];
@@ -2168,6 +2238,10 @@
       if (damage > 0) {
         const crit = Number.isFinite(previousCrit) && Number.isFinite(currentCrit) && currentCrit > previousCrit;
         monsterHits.push({ index, damage, crit });
+        addDamageHpTrail(combatUnits.monsters[index], previousHp, currentHp);
+      }
+      if (Number.isFinite(previousDmg) && Number.isFinite(currentDmg) && currentDmg > previousDmg) {
+        monsterSplats.push({ index, count: currentDmg - previousDmg });
       }
       if (Number.isFinite(currentHp)) monsterHp[index] = currentHp;
       if (Number.isFinite(currentDmg)) monsterDmgCounter[index] = currentDmg;
@@ -2176,11 +2250,30 @@
 
     if (completedPlayerCasts.length) {
       for (const cast of completedPlayerCasts) {
-        if (monsterHits.length) {
-          spawnPlayerAttack(cast.index, cast.abilityHrid, monsterHits, monsterHits.some(hit => hit.crit));
-          applyInferredStatuses(cast.abilityHrid, monsterHits);
+        const profile = PROFILES[cast.abilityHrid] || PROFILES.autoAttack;
+        if (profile.area || profile.chain) {
+          if (monsterHits.length) {
+            spawnPlayerAttack(cast.index, cast.abilityHrid, monsterHits, monsterHits.some(hit => hit.crit));
+            applyInferredStatuses(cast.abilityHrid, monsterHits);
+          } else {
+            spawnMissedPlayerAttack(cast, primaryMonsterIndexBeforeUpdate);
+          }
+          continue;
+        }
+
+        // A battle_updated frame may also contain other players' damage and
+        // anonymous DOT ticks.  Picking the largest HP loss made Fireball,
+        // Entangle and Water Strike fly to an unrelated monster.  Bind every
+        // single-target cast to the server's current primary monster instead.
+        const targetIndex = primaryMonsterIndexBeforeUpdate >= 0
+          ? primaryMonsterIndexBeforeUpdate
+          : (monsterSplats[0]?.index ?? monsterHits[0]?.index ?? -1);
+        const targetHit = monsterHits.find(hit => hit.index === targetIndex);
+        if (targetHit) {
+          spawnPlayerAttack(cast.index, cast.abilityHrid, [targetHit], targetHit.crit);
+          applyInferredStatuses(cast.abilityHrid, [targetHit]);
         } else {
-          spawnMissedPlayerAttack(cast);
+          spawnMissedPlayerAttack(cast, targetIndex);
         }
       }
     }
@@ -2199,6 +2292,7 @@
       if (damage > 0) {
         const crit = Number.isFinite(previousCrit) && Number.isFinite(currentCrit) && currentCrit > previousCrit;
         playerHits.push({ index, damage, crit });
+        addDamageHpTrail(combatUnits.players[index], previousHp, currentHp);
       } else if (damage < 0) {
         playerHeals.push({ index, healing: -damage });
       }
