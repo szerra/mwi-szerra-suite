@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI 戰鬥技能特效
 // @namespace    codex.local.mwi.combat-vfx
-// @version      0.1.14
+// @version      0.1.15
 // @description  攻擊讀條時在手前方顯示法陣，彈道同步命中，並把怪物狀態與全隊光環依實際持續時間附著在角色上。
 // @author       Local build for gzerr
 // @license      MIT
@@ -18,8 +18,8 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.1.14";
-  const CANVAS_ID = "mwiCombatVfxCanvas0114";
+  const VERSION = "0.1.15";
+  const CANVAS_ID = "mwiCombatVfxCanvas0115";
   const MONSTER_UNIT_CLASS = "mwiCombatVfxMonsterUnit";
   const ORIGINAL_SPLAT_STYLE_ID = "mwiCombatVfxOriginalMonsterSplatStyle";
   const WS_HOSTS = ["api.milkywayidle.com/ws", "api-test.milkywayidle.com/ws"];
@@ -28,8 +28,8 @@
   const HP_TRAIL_DURATION = 460;
   const hpTrailStates = new WeakMap();
 
-  if (window.__mwiCombatVfx0114Installed) return;
-  window.__mwiCombatVfx0114Installed = true;
+  if (window.__mwiCombatVfx0115Installed) return;
+  window.__mwiCombatVfx0115Installed = true;
 
   const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -478,7 +478,7 @@
     const unitRect = unit.getBoundingClientRect();
     return {
       left: Math.max(unitRect.left + 2, modelRect.left - 2),
-      top: unitRect.top + 2,
+      top: Math.max(0, unitRect.top - 36),
       right: Math.min(unitRect.right - 2, modelRect.right + 2),
       bottom: Math.min(unitRect.bottom - 2, modelRect.bottom + 2)
     };
@@ -1336,7 +1336,7 @@
         if (mode === "firestorm") drawFirestorm(target, p, alpha, effect.seed);
         if (p > 0.52) impactRing(target.point, p, effect.profile.color, effect.seed + target.index * 9, mode === "firestorm" ? 46 : 35);
       };
-      if (mode === "frostSurge") withEffectClip(target.dropBounds || target.bounds, drawTargetEffect);
+      if (mode === "frostSurge" || mode === "manaSpring") withEffectClip(target.dropBounds || target.bounds, drawTargetEffect);
       else drawTargetEffect();
     }
   }
@@ -1346,27 +1346,94 @@
     const center = targetBodyPoint(target);
     const width = Number.isFinite(anchor.width) ? anchor.width : 100;
     const height = Number.isFinite(anchor.height) ? anchor.height : 100;
-    const blockWidth = clamp(width * 0.72, 52, 78);
-    const blockHeight = clamp(height * 0.68, 58, 88);
+    const crystalWidth = clamp(width * 0.78, 58, 82);
+    const crystalHeight = clamp(height * 0.90, 76, 102);
     const fall = easeInOut(clamp(progress / 0.62));
     const crash = clamp((progress - 0.62) / 0.38);
     const intactAlpha = alpha * (1 - smoothstep(0.04, 0.58, crash));
     const bounds = target.dropBounds || target.bounds;
     const startY = bounds
-      ? (target.precast ? bounds.top + blockHeight / 2 + 2 : bounds.top - blockHeight * 0.42)
+      ? (target.precast ? bounds.top + crystalHeight * 0.72 : bounds.top - crystalHeight * 0.25)
       : center.y - height * 0.9;
     const impactY = center.y - clamp(height * 0.14, 8, 16);
     const blockY = lerp(startY, impactY, Math.pow(fall, 1.7));
     const blockX = center.x + Math.sin(progress * Math.PI * 3 + target.index) * 2.2 * (1 - fall);
 
     if (intactAlpha > 0.02) {
+      const circleY = bounds
+        ? Math.min(blockY - crystalHeight * 0.55 - 5, bounds.top + 18)
+        : blockY - crystalHeight * 0.64;
+      const summonAlpha = intactAlpha * (1 - smoothstep(0.40, 0.82, fall));
+
+      // A horizontal summoning seal opens above each monster's own card.
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.translate(blockX, circleY);
+      ctx.rotate(progress * 1.8 + target.index * 0.17);
+      ctx.strokeStyle = rgba([210, 251, 255], summonAlpha * 0.90);
+      ctx.shadowColor = rgba(COLORS.ice, summonAlpha);
+      ctx.shadowBlur = 9;
+      ctx.lineWidth = 1.15;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, crystalWidth * 0.52, 7.2, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([5, 4]);
+      ctx.lineDashOffset = -progress * 34;
+      ctx.strokeStyle = rgba(COLORS.ice, summonAlpha * 0.86);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, crystalWidth * 0.39, 4.7, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      for (let i = 0; i < 6; i++) {
+        const angle = i * Math.PI / 3;
+        const x1 = Math.cos(angle) * crystalWidth * 0.30;
+        const y1 = Math.sin(angle) * 3.6;
+        const x2 = Math.cos(angle) * crystalWidth * 0.45;
+        const y2 = Math.sin(angle) * 6.2;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      for (let i = 0; i < 5; i++) {
+        const streakX = blockX + (i - 2) * crystalWidth * 0.17;
+        const start = circleY + 3 + rand(seed + target.index * 19, i) * 5;
+        const end = Math.min(blockY - crystalHeight * 0.42, start + 18 + fall * 28);
+        pathGlow([
+          { x: streakX, y: start },
+          { x: streakX + Math.sin(i * 2.1) * 1.5, y: end }
+        ], [194, 246, 255], intactAlpha * 0.32, 0.7, 4);
+      }
+
       for (let i = 0; i < 4; i++) {
-        const streakX = blockX + (i - 1.5) * blockWidth * 0.21;
+        const streakX = blockX + (i - 1.5) * crystalWidth * 0.21;
         const streakLength = 12 + rand(seed + target.index * 13, i) * 18;
         pathGlow([
-          { x: streakX, y: blockY - blockHeight * 0.56 - streakLength },
-          { x: streakX, y: blockY - blockHeight * 0.56 - 2 }
+          { x: streakX, y: blockY - crystalHeight * 0.48 - streakLength },
+          { x: streakX, y: blockY - crystalHeight * 0.48 - 2 }
         ], COLORS.ice, intactAlpha * 0.38, 0.8, 4);
+      }
+
+      for (let i = 0; i < 7; i++) {
+        const side = i % 2 ? 1 : -1;
+        const fragmentX = blockX + side * crystalWidth * (0.42 + rand(seed + 73, i) * 0.16);
+        const fragmentY = blockY - crystalHeight * 0.32 + rand(seed + 89, i) * crystalHeight * 0.70;
+        const size = 1.4 + rand(seed + 97, i) * 2.4;
+        ctx.save();
+        ctx.translate(fragmentX, fragmentY);
+        ctx.rotate(progress * 4 + i);
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = rgba([220, 252, 255], intactAlpha * 0.64);
+        ctx.beginPath();
+        ctx.moveTo(0, -size * 1.8);
+        ctx.lineTo(size * 0.65, 0);
+        ctx.lineTo(0, size * 1.8);
+        ctx.lineTo(-size * 0.65, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
       }
 
       ctx.save();
@@ -1374,66 +1441,106 @@
       ctx.translate(blockX, blockY);
       ctx.rotate((rand(seed + target.index, 2) - 0.5) * 0.10 * (1 - fall));
       ctx.shadowColor = rgba(COLORS.ice, intactAlpha);
-      ctx.shadowBlur = 13;
+      ctx.shadowBlur = 14;
       ctx.lineJoin = "round";
-      ctx.lineWidth = 2.2;
+      ctx.lineWidth = 1.8;
 
-      const left = -blockWidth / 2;
-      const right = blockWidth / 2;
-      const top = -blockHeight / 2;
-      const bottom = blockHeight / 2;
-      const bevel = clamp(blockWidth * 0.14, 6, 10);
+      const sx = crystalWidth;
+      const sy = crystalHeight;
+      const silhouette = [
+        [-0.33, -0.33], [-0.24, -0.54], [-0.11, -0.43], [-0.02, -0.68],
+        [0.10, -0.46], [0.25, -0.61], [0.29, -0.38], [0.45, -0.25],
+        [0.36, -0.02], [0.30, 0.16], [0.21, 0.48], [0.10, 0.30],
+        [0.00, 0.70], [-0.10, 0.36], [-0.22, 0.57], [-0.25, 0.17],
+        [-0.39, 0.30], [-0.34, 0.01], [-0.48, -0.19]
+      ];
+      const tracePolygon = points => {
+        ctx.beginPath();
+        points.forEach(([x, y], index) => {
+          if (index === 0) ctx.moveTo(x * sx, y * sy);
+          else ctx.lineTo(x * sx, y * sy);
+        });
+        ctx.closePath();
+      };
 
-      ctx.fillStyle = rgba([62, 177, 236], intactAlpha * 0.58);
+      const iceGradient = ctx.createLinearGradient(0, -sy * 0.68, 0, sy * 0.70);
+      iceGradient.addColorStop(0, rgba([205, 250, 255], intactAlpha * 0.58));
+      iceGradient.addColorStop(0.48, rgba([42, 166, 235], intactAlpha * 0.56));
+      iceGradient.addColorStop(1, rgba([22, 110, 205], intactAlpha * 0.62));
+      ctx.fillStyle = iceGradient;
       ctx.strokeStyle = rgba([231, 252, 255], intactAlpha * 0.94);
-      ctx.beginPath();
-      ctx.moveTo(left + bevel, top);
-      ctx.lineTo(right - bevel * 0.55, top);
-      ctx.lineTo(right, top + bevel);
-      ctx.lineTo(right - bevel * 0.25, bottom - bevel * 0.45);
-      ctx.lineTo(right - bevel, bottom);
-      ctx.lineTo(left + bevel * 0.35, bottom);
-      ctx.lineTo(left, bottom - bevel);
-      ctx.lineTo(left, top + bevel * 0.65);
-      ctx.closePath();
+      tracePolygon(silhouette);
       ctx.fill();
       ctx.stroke();
 
-      ctx.fillStyle = rgba([194, 247, 255], intactAlpha * 0.34);
-      ctx.beginPath();
-      ctx.moveTo(left + bevel, top);
-      ctx.lineTo(right - bevel * 0.55, top);
-      ctx.lineTo(right - bevel * 1.45, top + bevel);
-      ctx.lineTo(left + bevel * 0.35, top + bevel * 1.18);
-      ctx.closePath();
-      ctx.fill();
+      const facets = [
+        { fill: [219, 251, 255], a: 0.27, p: [[-0.24, -0.54], [-0.02, -0.68], [-0.05, -0.04], [-0.33, -0.33]] },
+        { fill: [116, 218, 255], a: 0.23, p: [[-0.02, -0.68], [0.25, -0.61], [0.13, -0.09], [-0.05, -0.04]] },
+        { fill: [16, 91, 190], a: 0.28, p: [[0.25, -0.61], [0.45, -0.25], [0.13, -0.09]] },
+        { fill: [201, 248, 255], a: 0.20, p: [[-0.48, -0.19], [-0.05, -0.04], [-0.25, 0.17], [-0.39, 0.30]] },
+        { fill: [109, 211, 255], a: 0.25, p: [[-0.05, -0.04], [0.13, -0.09], [0.10, 0.30], [0.00, 0.70], [-0.10, 0.36]] },
+        { fill: [16, 83, 181], a: 0.26, p: [[0.13, -0.09], [0.36, -0.02], [0.21, 0.48], [0.10, 0.30]] },
+        { fill: [188, 242, 255], a: 0.18, p: [[-0.25, 0.17], [-0.05, -0.04], [-0.10, 0.36], [-0.22, 0.57]] }
+      ];
+      for (const facet of facets) {
+        ctx.fillStyle = rgba(facet.fill, intactAlpha * facet.a);
+        ctx.strokeStyle = rgba([226, 252, 255], intactAlpha * 0.20);
+        ctx.lineWidth = 0.65;
+        tracePolygon(facet.p);
+        ctx.fill();
+        ctx.stroke();
+      }
 
-      ctx.fillStyle = rgba([31, 119, 207], intactAlpha * 0.30);
+      // Luminous fractures converge on the snowflake core.
+      ctx.strokeStyle = rgba([234, 254, 255], intactAlpha * (0.48 + fall * 0.44));
+      ctx.shadowColor = rgba([113, 224, 255], intactAlpha);
+      ctx.shadowBlur = 7;
+      ctx.lineWidth = 0.95;
       ctx.beginPath();
-      ctx.moveTo(right - bevel * 1.45, top + bevel);
-      ctx.lineTo(right - bevel * 0.55, top);
-      ctx.lineTo(right, top + bevel);
-      ctx.lineTo(right - bevel * 0.25, bottom - bevel * 0.45);
-      ctx.lineTo(right - bevel * 1.25, bottom - bevel * 1.2);
-      ctx.closePath();
-      ctx.fill();
-
-      ctx.strokeStyle = rgba([239, 254, 255], intactAlpha * (0.36 + fall * 0.5));
-      ctx.lineWidth = 1.1;
-      ctx.beginPath();
-      ctx.moveTo(-blockWidth * 0.08, top + bevel * 0.7);
-      ctx.lineTo(-blockWidth * 0.18, -blockHeight * 0.06);
-      ctx.lineTo(blockWidth * 0.02, blockHeight * 0.09);
-      ctx.lineTo(-blockWidth * 0.11, bottom - bevel * 0.7);
-      ctx.moveTo(blockWidth * 0.20, -blockHeight * 0.16);
-      ctx.lineTo(blockWidth * 0.05, blockHeight * 0.02);
+      ctx.moveTo(-sx * 0.04, -sy * 0.02);
+      ctx.lineTo(-sx * 0.20, -sy * 0.25);
+      ctx.lineTo(-sx * 0.11, -sy * 0.43);
+      ctx.moveTo(sx * 0.02, -sy * 0.03);
+      ctx.lineTo(sx * 0.18, -sy * 0.26);
+      ctx.lineTo(sx * 0.25, -sy * 0.52);
+      ctx.moveTo(0, sy * 0.02);
+      ctx.lineTo(sx * 0.08, sy * 0.27);
+      ctx.lineTo(0, sy * 0.62);
+      ctx.moveTo(-sx * 0.03, sy * 0.02);
+      ctx.lineTo(-sx * 0.23, sy * 0.21);
+      ctx.lineTo(-sx * 0.37, sy * 0.26);
       ctx.stroke();
+
+      // Six-armed snowflake embedded in the crystal.
+      const coreY = -sy * 0.02;
+      const coreRadius = clamp(sx * 0.12, 7, 10);
+      ctx.strokeStyle = rgba([243, 255, 255], intactAlpha * 0.98);
+      ctx.lineWidth = 1.15;
+      ctx.shadowBlur = 10;
+      for (let i = 0; i < 3; i++) {
+        const angle = i * Math.PI / 3;
+        const dx = Math.cos(angle) * coreRadius;
+        const dy = Math.sin(angle) * coreRadius;
+        ctx.beginPath();
+        ctx.moveTo(-dx, coreY - dy);
+        ctx.lineTo(dx, coreY + dy);
+        for (const direction of [-1, 1]) {
+          const px = Math.cos(angle) * coreRadius * 0.56 * direction;
+          const py = Math.sin(angle) * coreRadius * 0.56 * direction;
+          const branch = coreRadius * 0.26;
+          ctx.moveTo(px, coreY + py);
+          ctx.lineTo(px + Math.cos(angle + Math.PI * 0.72) * branch * direction, coreY + py + Math.sin(angle + Math.PI * 0.72) * branch * direction);
+          ctx.moveTo(px, coreY + py);
+          ctx.lineTo(px + Math.cos(angle - Math.PI * 0.72) * branch * direction, coreY + py + Math.sin(angle - Math.PI * 0.72) * branch * direction);
+        }
+        ctx.stroke();
+      }
       ctx.restore();
     }
 
     if (crash <= 0) return;
     const burstAlpha = alpha * (1 - smoothstep(0.60, 1, crash));
-    const burstCenter = { x: center.x, y: impactY + blockHeight * 0.16 };
+    const burstCenter = { x: center.x, y: impactY + crystalHeight * 0.16 };
     discGlow(burstCenter.x, burstCenter.y, 10 + easeOut(crash) * 20, COLORS.ice, burstAlpha * 0.68);
     ellipseGlow(burstCenter.x, burstCenter.y + 7, 12 + easeOut(crash) * 28, 6 + easeOut(crash) * 13, [224, 251, 255], burstAlpha * 0.72, 1.5);
 
@@ -1443,7 +1550,7 @@
       const distance = easeOut(crash) * (12 + rand(seed + 17, i) * 40);
       const shardX = burstCenter.x + Math.cos(angle) * distance;
       const shardY = burstCenter.y + Math.sin(angle) * distance + crash * crash * 14;
-      const shardSize = 3.5 + rand(seed + 29, i) * 6;
+      const shardSize = 3.5 + rand(seed + 29, i) * 5.5;
       const rotation = angle + crash * (rand(seed + 41, i) - 0.5) * 3.2;
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
@@ -1455,9 +1562,10 @@
       ctx.shadowColor = rgba(COLORS.ice, burstAlpha);
       ctx.shadowBlur = 6;
       ctx.beginPath();
-      ctx.moveTo(shardSize, 0);
-      ctx.lineTo(-shardSize * 0.55, shardSize * 0.42);
-      ctx.lineTo(-shardSize * 0.22, -shardSize * 0.38);
+      ctx.moveTo(shardSize * 1.55, 0);
+      ctx.lineTo(-shardSize * 0.22, shardSize * 0.30);
+      ctx.lineTo(-shardSize * 0.72, 0);
+      ctx.lineTo(-shardSize * 0.22, -shardSize * 0.30);
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
@@ -1467,17 +1575,83 @@
 
   function drawManaFountain(effect, target, progress, alpha) {
     const base = targetGroundPoint(target);
-    for (let i = 0; i < 7; i++) {
-      const offset = (i - 3) * 6;
-      const height = progress * (45 + Math.abs(i - 3) * -4);
-      pathGlow([{ x: base.x + offset, y: base.y }, { x: base.x + offset * 0.35, y: base.y - height }], COLORS.water, alpha, 2.2, 9);
+    const rise = easeOut(clamp(progress / 0.42));
+    const bloom = easeOut(clamp((progress - 0.18) / 0.48));
+    const settle = smoothstep(0.56, 1, progress);
+    const fountainHeight = 47;
+    const apex = { x: base.x, y: base.y - fountainHeight * rise };
+
+    // Rotating mana basin: a liquid-looking pool with an inner rune ring.
+    ellipseGlow(base.x, base.y + 2, 12 + bloom * 23, 4 + bloom * 5, [80, 185, 255], alpha * 0.68, 1.45, progress * 2.4);
+    ellipseGlow(base.x, base.y + 1, 7 + bloom * 14, 2.5 + bloom * 3.6, [150, 105, 255], alpha * 0.54, 1.0, -progress * 3.1);
+    discGlow(base.x, base.y - 1, 4 + bloom * 7, [118, 226, 255], alpha * 0.54);
+
+    // Several narrow jets twist together before opening at the top.
+    for (let i = 0; i < 5; i++) {
+      const offset = (i - 2) * 3.2;
+      const sway = Math.sin(progress * Math.PI * 5 + i * 1.4) * 2.2;
+      const start = { x: base.x + offset, y: base.y };
+      const control = { x: base.x - offset * 0.8 + sway, y: lerp(base.y, apex.y, 0.56) };
+      const end = { x: apex.x + offset * 0.32, y: apex.y + Math.abs(offset) * 0.18 };
+      const points = [];
+      for (let step = 0; step <= 16; step++) points.push(qBezier(start, control, end, step / 16));
+      pathGlow(points, i % 2 ? [113, 205, 255] : [194, 248, 255], alpha * (0.62 + rise * 0.24), 1.15 + (i === 2 ? 0.55 : 0), 7);
     }
+
+    // At the crest the mana fans out, then falls back as curved luminous water.
+    if (bloom > 0.01) {
+      for (let i = 0; i < 8; i++) {
+        const side = i < 4 ? -1 : 1;
+        const lane = i % 4;
+        const spread = 13 + lane * 6.2;
+        const start = { x: apex.x + side * (lane * 0.8), y: apex.y + lane * 0.7 };
+        const control = {
+          x: apex.x + side * spread * 0.64,
+          y: apex.y - (10 + lane * 1.8) * bloom
+        };
+        const end = {
+          x: base.x + side * spread * bloom,
+          y: base.y - 2 - (1 - bloom) * 23 + settle * 3
+        };
+        const points = [];
+        const visible = clamp(bloom * 1.18);
+        for (let step = 0; step <= 18; step++) points.push(qBezier(start, control, end, visible * step / 18));
+        pathGlow(points, lane % 2 ? [91, 166, 255] : [138, 234, 255], alpha * (0.58 - lane * 0.055), 1.05, 6);
+      }
+
+      for (let i = 0; i < 9; i++) {
+        const angle = i * 2.399 + progress * 3.2;
+        const radius = 8 + (i % 4) * 6;
+        const particle = {
+          x: apex.x + Math.cos(angle) * radius * bloom,
+          y: apex.y + Math.sin(angle) * radius * 0.42 * bloom + settle * 8
+        };
+        discGlow(particle.x, particle.y, 1.2 + (i % 3) * 0.55, i % 3 ? [123, 221, 255] : [177, 119, 255], alpha * 0.56);
+      }
+    }
+
+    // A small diamond rune makes it read as mana rather than ordinary water.
+    if (rise > 0.35) {
+      const runeY = apex.y - 7;
+      const runeSize = 4 + bloom * 2.5;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.translate(apex.x, runeY);
+      ctx.rotate(Math.PI / 4 + progress * 1.8);
+      ctx.strokeStyle = rgba([211, 251, 255], alpha * 0.84);
+      ctx.shadowColor = rgba([112, 174, 255], alpha);
+      ctx.shadowBlur = 7;
+      ctx.lineWidth = 1.05;
+      ctx.strokeRect(-runeSize, -runeSize, runeSize * 2, runeSize * 2);
+      ctx.restore();
+    }
+
     const returnT = easeInOut(clamp((progress - 0.46) / 0.54));
     if (returnT > 0) {
       const control = { x: (base.x + effect.start.x) / 2, y: Math.min(base.y, effect.start.y) - 34 };
       const points = [];
       for (let i = 0; i <= 18; i++) points.push(qBezier(base, control, effect.start, returnT * i / 18));
-      pathGlow(points, [75, 150, 255], alpha * 0.45, 1.4, 7);
+      pathGlow(points, [106, 181, 255], alpha * 0.34, 1.0, 6);
     }
   }
 
