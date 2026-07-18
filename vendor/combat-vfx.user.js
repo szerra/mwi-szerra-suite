@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI 戰鬥技能特效
 // @namespace    codex.local.mwi.combat-vfx
-// @version      0.1.12
+// @version      0.1.13
 // @description  攻擊讀條時在手前方顯示法陣，彈道同步命中，並把怪物狀態與全隊光環依實際持續時間附著在角色上。
 // @author       Local build for gzerr
 // @license      MIT
@@ -18,16 +18,18 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.1.12";
-  const CANVAS_ID = "mwiCombatVfxCanvas0112";
+  const VERSION = "0.1.13";
+  const CANVAS_ID = "mwiCombatVfxCanvas0113";
+  const MONSTER_UNIT_CLASS = "mwiCombatVfxMonsterUnit";
+  const ORIGINAL_SPLAT_STYLE_ID = "mwiCombatVfxOriginalMonsterSplatStyle";
   const WS_HOSTS = ["api.milkywayidle.com/ws", "api-test.milkywayidle.com/ws"];
   const HP_TRAIL_CLASS = "mwiCombatVfxHpTrail";
   const HP_TRAIL_DELAY = 90;
   const HP_TRAIL_DURATION = 460;
   const hpTrailStates = new WeakMap();
 
-  if (window.__mwiCombatVfx0112Installed) return;
-  window.__mwiCombatVfx0112Installed = true;
+  if (window.__mwiCombatVfx0113Installed) return;
+  window.__mwiCombatVfx0113Installed = true;
 
   const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -230,9 +232,24 @@
   let playerBlazeChance = [];
   let pendingMonsterCasts = new Map();
 
+  function ensureOriginalMonsterSplatStyle() {
+    if (document.getElementById(ORIGINAL_SPLAT_STYLE_ID)) return;
+    const style = document.createElement("style");
+    style.id = ORIGINAL_SPLAT_STYLE_ID;
+    style.textContent = `
+      .${MONSTER_UNIT_CLASS} [class*="CombatUnit_splat"][class*="CombatUnit_damage"],
+      .${MONSTER_UNIT_CLASS} [class*="CombatUnit_splat"][class*="CombatUnit_miss"],
+      .${MONSTER_UNIT_CLASS} [class*="CombatUnit_splat"][class*="CombatUnit_critical"] {
+        display: none !important;
+      }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
   function ensureCanvas() {
-    if (canvas && canvas.isConnected) return true;
     if (!document.body) return false;
+    ensureOriginalMonsterSplatStyle();
+    if (canvas && canvas.isConnected) return true;
     canvas = document.getElementById(CANVAS_ID);
     if (!canvas) {
       canvas = document.createElement("canvas");
@@ -275,6 +292,7 @@
       if (!players.length && grids[0]) players = visibleUnits(grids[0]);
       if (!monsters.length && grids[1]) monsters = visibleUnits(grids[1]);
     }
+    monsters.forEach(unit => unit.classList.add(MONSTER_UNIT_CLASS));
     return { players, monsters };
   }
 
@@ -719,15 +737,17 @@
     for (const target of effect.targets) {
       if (!(target.damage > 0) && !target.miss) continue;
       const label = target.miss ? "MISS" : String(Math.round(target.damage));
-      const size = target.miss ? 17 : clamp(14 + Math.log10(target.damage + 1) * 3.2, 14, 27);
+      const size = target.miss ? 16 : clamp(13 + Math.log10(target.damage + 1) * 2.7, 13, 24);
       ctx.save();
       ctx.globalCompositeOperation = "source-over";
-      ctx.font = `800 ${size}px Arial, sans-serif`;
+      ctx.font = `500 ${size}px "Arial Narrow", "Roboto Condensed", "Segoe UI", Arial, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.lineJoin = "round";
-      ctx.lineWidth = Math.max(3, size * 0.22);
-      ctx.strokeStyle = target.miss ? rgba([53, 64, 82], alpha * 0.96) : rgba(effect.profile.color, alpha * 0.92);
+      ctx.lineWidth = Math.max(1.25, size * 0.075);
+      ctx.strokeStyle = target.miss
+        ? rgba([53, 64, 82], alpha * 0.82)
+        : rgba([26, 42, 54], alpha * 0.86);
       const y = target.point.y - 29 - easeOut(local) * 19;
       ctx.strokeText(label, target.point.x, y);
       ctx.fillStyle = target.miss
@@ -1287,31 +1307,144 @@
     const erupt = easeOut(clamp((p - 0.34) / 0.34));
     const alpha = fadeOut(p, 0.82);
     for (const target of effect.targets) {
-      const body = targetBodyPoint(target);
-      // This is an impact lock around the monster body, not a floor casting circle.
-      // The attack casting circle already appears in front of the caster's hand.
-      ellipseGlow(body.x, body.y, 17 + ready * 12, 22 + ready * 15, effect.profile.color, ready * 0.42, 1.25, -p * 2.4 - target.index);
-      if (mode === "frostSurge") drawIceEruption(target, erupt, alpha, effect.seed);
-      if (mode === "manaSpring") drawManaFountain(effect, target, erupt, alpha);
-      if (mode === "toxicPollen") drawToxicDust(target, erupt, alpha, effect.seed);
-      if (mode === "naturesVeil") drawSporeVeil(target, erupt, alpha, effect.seed);
-      if (mode === "flameBlast") drawLavaEruption(target, erupt, alpha, effect.seed);
-      if (mode === "firestorm") drawFirestorm(target, p, alpha, effect.seed);
-      if (p > 0.52) impactRing(target.point, p, effect.profile.color, effect.seed + target.index * 9, mode === "firestorm" ? 46 : 35);
+      const drawTargetEffect = () => {
+        const body = targetBodyPoint(target);
+        // This is an impact lock around the monster body, not a floor casting circle.
+        // The attack casting circle already appears in front of the caster's hand.
+        ellipseGlow(body.x, body.y, 17 + ready * 12, 22 + ready * 15, effect.profile.color, ready * 0.42, 1.25, -p * 2.4 - target.index);
+        if (mode === "frostSurge") drawIceEruption(target, erupt, alpha, effect.seed);
+        if (mode === "manaSpring") drawManaFountain(effect, target, erupt, alpha);
+        if (mode === "toxicPollen") drawToxicDust(target, erupt, alpha, effect.seed);
+        if (mode === "naturesVeil") drawSporeVeil(target, erupt, alpha, effect.seed);
+        if (mode === "flameBlast") drawLavaEruption(target, erupt, alpha, effect.seed);
+        if (mode === "firestorm") drawFirestorm(target, p, alpha, effect.seed);
+        if (p > 0.52) impactRing(target.point, p, effect.profile.color, effect.seed + target.index * 9, mode === "firestorm" ? 46 : 35);
+      };
+      if (mode === "frostSurge") withEffectClip(target.bounds, drawTargetEffect);
+      else drawTargetEffect();
     }
   }
 
   function drawIceEruption(target, progress, alpha, seed) {
-    const center = targetBodyPoint(target, 5);
-    const baseY = center.y + clamp(target.anchor.height * 0.14, 10, 16);
-    discGlow(center.x, center.y, 8 + progress * 12, COLORS.ice, alpha * 0.72);
-    for (let i = 0; i < 9; i++) {
-      const x = center.x + (i - 4) * 6 + (rand(seed + target.index, i) - 0.5) * 4;
-      const height = progress * (24 + rand(seed + 5, i) * 42);
-      ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.fillStyle = rgba(COLORS.ice, alpha * 0.62); ctx.strokeStyle = rgba([235, 253, 255], alpha); ctx.shadowColor = rgba(COLORS.ice, alpha); ctx.shadowBlur = 9;
-      ctx.beginPath(); ctx.moveTo(x - 4, baseY); ctx.lineTo(x, baseY - height); ctx.lineTo(x + 4, baseY); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
+    const anchor = target.anchor || {};
+    const center = targetBodyPoint(target);
+    const width = Number.isFinite(anchor.width) ? anchor.width : 100;
+    const height = Number.isFinite(anchor.height) ? anchor.height : 100;
+    const blockWidth = clamp(width * 0.58, 44, 70);
+    const blockHeight = clamp(height * 0.52, 50, 78);
+    const fall = easeInOut(clamp(progress / 0.62));
+    const crash = clamp((progress - 0.62) / 0.38);
+    const intactAlpha = alpha * (1 - smoothstep(0.04, 0.58, crash));
+    const bounds = target.bounds;
+    const startY = bounds ? bounds.top - blockHeight * 0.42 : center.y - height * 0.9;
+    const impactY = center.y - clamp(height * 0.14, 8, 16);
+    const blockY = lerp(startY, impactY, Math.pow(fall, 1.7));
+    const blockX = center.x + Math.sin(progress * Math.PI * 3 + target.index) * 2.2 * (1 - fall);
+
+    if (intactAlpha > 0.02) {
+      for (let i = 0; i < 4; i++) {
+        const streakX = blockX + (i - 1.5) * blockWidth * 0.21;
+        const streakLength = 12 + rand(seed + target.index * 13, i) * 18;
+        pathGlow([
+          { x: streakX, y: blockY - blockHeight * 0.56 - streakLength },
+          { x: streakX, y: blockY - blockHeight * 0.56 - 2 }
+        ], COLORS.ice, intactAlpha * 0.38, 0.8, 4);
+      }
+
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.translate(blockX, blockY);
+      ctx.rotate((rand(seed + target.index, 2) - 0.5) * 0.10 * (1 - fall));
+      ctx.shadowColor = rgba(COLORS.ice, intactAlpha);
+      ctx.shadowBlur = 13;
+      ctx.lineJoin = "round";
+      ctx.lineWidth = 1.6;
+
+      const left = -blockWidth / 2;
+      const right = blockWidth / 2;
+      const top = -blockHeight / 2;
+      const bottom = blockHeight / 2;
+      const bevel = clamp(blockWidth * 0.14, 6, 10);
+
+      ctx.fillStyle = rgba([62, 177, 236], intactAlpha * 0.42);
+      ctx.strokeStyle = rgba([231, 252, 255], intactAlpha * 0.94);
+      ctx.beginPath();
+      ctx.moveTo(left + bevel, top);
+      ctx.lineTo(right - bevel * 0.55, top);
+      ctx.lineTo(right, top + bevel);
+      ctx.lineTo(right - bevel * 0.25, bottom - bevel * 0.45);
+      ctx.lineTo(right - bevel, bottom);
+      ctx.lineTo(left + bevel * 0.35, bottom);
+      ctx.lineTo(left, bottom - bevel);
+      ctx.lineTo(left, top + bevel * 0.65);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = rgba([194, 247, 255], intactAlpha * 0.34);
+      ctx.beginPath();
+      ctx.moveTo(left + bevel, top);
+      ctx.lineTo(right - bevel * 0.55, top);
+      ctx.lineTo(right - bevel * 1.45, top + bevel);
+      ctx.lineTo(left + bevel * 0.35, top + bevel * 1.18);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = rgba([31, 119, 207], intactAlpha * 0.30);
+      ctx.beginPath();
+      ctx.moveTo(right - bevel * 1.45, top + bevel);
+      ctx.lineTo(right - bevel * 0.55, top);
+      ctx.lineTo(right, top + bevel);
+      ctx.lineTo(right - bevel * 0.25, bottom - bevel * 0.45);
+      ctx.lineTo(right - bevel * 1.25, bottom - bevel * 1.2);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = rgba([239, 254, 255], intactAlpha * (0.36 + fall * 0.5));
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.moveTo(-blockWidth * 0.08, top + bevel * 0.7);
+      ctx.lineTo(-blockWidth * 0.18, -blockHeight * 0.06);
+      ctx.lineTo(blockWidth * 0.02, blockHeight * 0.09);
+      ctx.lineTo(-blockWidth * 0.11, bottom - bevel * 0.7);
+      ctx.moveTo(blockWidth * 0.20, -blockHeight * 0.16);
+      ctx.lineTo(blockWidth * 0.05, blockHeight * 0.02);
+      ctx.stroke();
+      ctx.restore();
     }
-    drawSnowflake(target.point, 0.55 + progress * 0.25, COLORS.ice);
+
+    if (crash <= 0) return;
+    const burstAlpha = alpha * (1 - smoothstep(0.60, 1, crash));
+    const burstCenter = { x: center.x, y: impactY + blockHeight * 0.16 };
+    discGlow(burstCenter.x, burstCenter.y, 10 + easeOut(crash) * 20, COLORS.ice, burstAlpha * 0.68);
+    ellipseGlow(burstCenter.x, burstCenter.y + 7, 12 + easeOut(crash) * 28, 6 + easeOut(crash) * 13, [224, 251, 255], burstAlpha * 0.72, 1.5);
+
+    for (let i = 0; i < 12; i++) {
+      const random = rand(seed + target.index * 31, i);
+      const angle = lerp(-Math.PI * 0.94, -Math.PI * 0.06, random);
+      const distance = easeOut(crash) * (12 + rand(seed + 17, i) * 40);
+      const shardX = burstCenter.x + Math.cos(angle) * distance;
+      const shardY = burstCenter.y + Math.sin(angle) * distance + crash * crash * 14;
+      const shardSize = 3.5 + rand(seed + 29, i) * 6;
+      const rotation = angle + crash * (rand(seed + 41, i) - 0.5) * 3.2;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.translate(shardX, shardY);
+      ctx.rotate(rotation);
+      ctx.fillStyle = rgba(i % 3 ? COLORS.ice : [235, 253, 255], burstAlpha * 0.68);
+      ctx.strokeStyle = rgba([239, 254, 255], burstAlpha * 0.9);
+      ctx.lineWidth = 0.8;
+      ctx.shadowColor = rgba(COLORS.ice, burstAlpha);
+      ctx.shadowBlur = 6;
+      ctx.beginPath();
+      ctx.moveTo(shardSize, 0);
+      ctx.lineTo(-shardSize * 0.55, shardSize * 0.42);
+      ctx.lineTo(-shardSize * 0.22, -shardSize * 0.38);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   function drawManaFountain(effect, target, progress, alpha) {
@@ -1979,6 +2112,7 @@
         damage: hit.damage,
         miss: Boolean(hit.miss),
         anchor,
+        bounds: unitEffectBounds(hit.element),
         point: {
           x: anchor.x + (hit.miss ? missDirection * 36 : 0),
           y: anchor.y - (hit.miss ? 26 : 0)
