@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI 戰鬥技能特效
 // @namespace    codex.local.mwi.combat-vfx
-// @version      0.1.15
+// @version      0.1.16
 // @description  攻擊讀條時在手前方顯示法陣，彈道同步命中，並把怪物狀態與全隊光環依實際持續時間附著在角色上。
 // @author       Local build for gzerr
 // @license      MIT
@@ -18,8 +18,8 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.1.15";
-  const CANVAS_ID = "mwiCombatVfxCanvas0115";
+  const VERSION = "0.1.16";
+  const CANVAS_ID = "mwiCombatVfxCanvas0116";
   const MONSTER_UNIT_CLASS = "mwiCombatVfxMonsterUnit";
   const ORIGINAL_SPLAT_STYLE_ID = "mwiCombatVfxOriginalMonsterSplatStyle";
   const WS_HOSTS = ["api.milkywayidle.com/ws", "api-test.milkywayidle.com/ws"];
@@ -28,8 +28,8 @@
   const HP_TRAIL_DURATION = 460;
   const hpTrailStates = new WeakMap();
 
-  if (window.__mwiCombatVfx0115Installed) return;
-  window.__mwiCombatVfx0115Installed = true;
+  if (window.__mwiCombatVfx0116Installed) return;
+  window.__mwiCombatVfx0116Installed = true;
 
   const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -805,11 +805,84 @@
     ctx.restore();
   }
 
+  function drawWeaponProcRain(bounds, anchor, p, seed, kind) {
+    if (!bounds || !anchor) return;
+    const water = kind === "water";
+    const color = water ? [103, 203, 255] : [105, 255, 151];
+    const accent = water ? [211, 249, 255] : [225, 255, 205];
+    const alpha = smoothstep(0, 0.08, p) * fadeOut(p, 0.82);
+    if (alpha <= 0.01) return;
+    const left = bounds.left + 7;
+    const right = bounds.right - 7;
+    const top = bounds.top + 4;
+    const groundY = Math.min(bounds.bottom - 6, Number.isFinite(anchor.groundY) ? anchor.groundY : bounds.bottom - 8);
+    const bottom = Math.max(top + 12, groundY - 1);
+    const count = water ? 13 : 15;
+
+    for (let i = 0; i < count; i++) {
+      const speed = 1.22 + rand(seed + 17, i) * 0.58;
+      const phase = (p * speed + rand(seed + 31, i)) % 1;
+      const localAlpha = alpha
+        * smoothstep(0, 0.08, phase)
+        * (1 - smoothstep(0.84, 1, phase));
+      const lane = rand(seed + 47, i);
+      const x = lerp(left, right, lane) + Math.sin(p * 8 + i * 1.7) * 1.5;
+      const y = lerp(top, bottom, phase);
+      const size = 2.1 + rand(seed + 61, i) * 2.0;
+
+      if (water) {
+        pathGlow([
+          { x, y: y - 8 - size },
+          { x: x - 0.8, y: y - size * 1.25 }
+        ], color, localAlpha * 0.32, 0.65, 3);
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.translate(x, y);
+        ctx.fillStyle = rgba(color, localAlpha * 0.72);
+        ctx.strokeStyle = rgba(accent, localAlpha * 0.92);
+        ctx.shadowColor = rgba(color, localAlpha);
+        ctx.shadowBlur = 6;
+        ctx.lineWidth = 0.75;
+        ctx.beginPath();
+        ctx.moveTo(0, -size * 1.8);
+        ctx.bezierCurveTo(size * 0.95, -size * 0.45, size * 0.86, size * 0.78, 0, size);
+        ctx.bezierCurveTo(-size * 0.86, size * 0.78, -size * 0.95, -size * 0.45, 0, -size * 1.8);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      } else {
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.translate(x, y);
+        ctx.strokeStyle = rgba(i % 3 ? color : accent, localAlpha * 0.92);
+        ctx.shadowColor = rgba(color, localAlpha);
+        ctx.shadowBlur = 6;
+        ctx.lineWidth = 1.15;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(0, -size * 1.30);
+        ctx.lineTo(0, size * 1.30);
+        ctx.moveTo(-size * 1.30, 0);
+        ctx.lineTo(size * 1.30, 0);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    if (water) {
+      for (let i = 0; i < 3; i++) {
+        const x = lerp(left + 5, right - 5, rand(seed + 83, i));
+        ellipseGlow(x, groundY, 3 + i * 1.6, 1.0 + i * 0.45, accent, alpha * (0.36 - i * 0.06), 0.7, p * 3 + i);
+      }
+    } else {
+      ellipseGlow(anchor.x, groundY, 8 + easeOut(p) * 12, 2.4 + easeOut(p) * 3.2, color, alpha * 0.34, 0.9, -p * 2.4);
+    }
+  }
+
   function drawBloomHeal(effect, p) {
     const target = effect.targets[0];
     if (!target) return;
     const color = effect.profile.color;
-    const accent = COLORS.teal;
     const flower = [158, 255, 188];
     const targetPoint = target.point;
     const alpha = fadeOut(p, 0.75);
@@ -819,20 +892,7 @@
     // hand and clipped to that player's portrait so it never covers a teammate.
     withEffectClip(effect.casterBounds, () => {
       drawTridentGlyph(effect.casterHand, 44, color, flower, handAlpha, 1.35);
-      discGlow(effect.casterHand.x, effect.casterHand.y, 5.5, accent, handAlpha * 0.42);
-      for (let i = 0; i < 5; i++) {
-        const angle = i * Math.PI * 2 / 5 + p * 1.2;
-        const radius = 10 + 5 * easeOut(p);
-        bloomPetal(
-          effect.casterHand.x + Math.cos(angle) * radius,
-          effect.casterHand.y + Math.sin(angle) * radius,
-          angle,
-          5,
-          1.6,
-          i % 2 ? flower : accent,
-          handAlpha * 0.58
-        );
-      }
+      discGlow(effect.casterHand.x, effect.casterHand.y, 5.5, COLORS.teal, handAlpha * 0.42);
     });
 
     const bloom = clamp((p - 0.10) / 0.44);
@@ -841,23 +901,27 @@
     const open = easeOut(bloom);
     const center = { x: targetPoint.x, y: targetPoint.y + 8 };
 
-    // The receiver gets only a compact local heal bloom. No projectile crosses
-    // the party and no second trident covers the healed character.
+    // The healed character receives a compact rain of green healing crosses.
+    // It stays inside that party slot and never covers a neighbouring player.
     withEffectClip(target.bounds, () => {
-      discGlow(center.x, center.y, 7 + open * 7, color, bloomAlpha * 0.60);
-      for (let i = 0; i < 8; i++) {
-        const angle = i * Math.PI / 4 + p * 0.55;
-        const radius = 5 + open * 10;
-        bloomPetal(
-          center.x + Math.cos(angle) * radius * 0.52,
-          center.y + Math.sin(angle) * radius * 0.34,
-          angle,
-          6 + open * 9,
-          2.0 + open * 2.3,
-          i % 2 ? flower : accent,
-          bloomAlpha * (0.56 + open * 0.28)
-        );
-      }
+      drawWeaponProcRain(target.bounds, target.anchor, p, effect.seed + target.index * 37, "heal");
+      discGlow(center.x, center.y, 5 + open * 5, color, bloomAlpha * 0.42);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.translate(center.x, center.y - 5);
+      ctx.strokeStyle = rgba(flower, bloomAlpha * 0.82);
+      ctx.shadowColor = rgba(color, bloomAlpha);
+      ctx.shadowBlur = 8;
+      ctx.lineCap = "round";
+      ctx.lineWidth = 1.7;
+      const crossSize = 5 + open * 3;
+      ctx.beginPath();
+      ctx.moveTo(0, -crossSize);
+      ctx.lineTo(0, crossSize);
+      ctx.moveTo(-crossSize, 0);
+      ctx.lineTo(crossSize, 0);
+      ctx.stroke();
+      ctx.restore();
     });
 
     if (p > 0.28) {
@@ -878,34 +942,9 @@
     withEffectClip(effect.casterBounds, () => {
       drawTridentGlyph(effect.casterHand, 43, color, accent, alpha, 1.35);
       discGlow(effect.casterHand.x, effect.casterHand.y, 5.5, color, alpha * 0.44);
+      drawWeaponProcRain(effect.casterBounds, effect.sourceAnchor, p, effect.seed, "water");
       const groundY = effect.sourceAnchor.groundY;
-      ellipseGlow(effect.sourceAnchor.x, groundY, 10 + open * 22, 3 + open * 5, color, alpha * 0.72, 1.45);
-      ellipseGlow(effect.sourceAnchor.x, groundY, 6 + open * 14, 2 + open * 3, accent, alpha * 0.58, 1.05);
-
-      ctx.save();
-      ctx.globalCompositeOperation = "lighter";
-      ctx.strokeStyle = rgba(accent, alpha * 0.84);
-      ctx.shadowColor = rgba(color, alpha);
-      ctx.shadowBlur = 7;
-      ctx.lineWidth = 1.5;
-      const radius = 15 + open * 4;
-      for (let ring = 0; ring < 2; ring++) {
-        const start = -Math.PI * 0.18 + ring * Math.PI;
-        const end = start - Math.PI * (0.9 + open * 0.55);
-        ctx.beginPath();
-        ctx.arc(effect.sourceAnchor.x, effect.sourceAnchor.y, radius + ring * 7, start, end, true);
-        ctx.stroke();
-        const hx = effect.sourceAnchor.x + Math.cos(end) * (radius + ring * 7);
-        const hy = effect.sourceAnchor.y + Math.sin(end) * (radius + ring * 7);
-        ctx.beginPath();
-        ctx.moveTo(hx, hy);
-        ctx.lineTo(hx + 5, hy - 2);
-        ctx.lineTo(hx + 2, hy + 4);
-        ctx.closePath();
-        ctx.fillStyle = rgba(accent, alpha * 0.86);
-        ctx.fill();
-      }
-      ctx.restore();
+      ellipseGlow(effect.sourceAnchor.x, groundY, 7 + open * 14, 2 + open * 3, color, alpha * 0.46, 1.0, p * 2.4);
 
       if (p > 0.18) {
         const textLocal = clamp((p - 0.18) / 0.62);
@@ -925,17 +964,44 @@
       discGlow(effect.casterHand.x, effect.casterHand.y, 5.5, fire, alpha * 0.46);
     });
 
-    const impact = clamp((p - 0.12) / 0.58);
-    if (impact <= 0) return;
-    const impactAlpha = fadeOut(impact, 0.58);
-    const open = easeOut(impact);
+    const travel = easeInOut(clamp((p - 0.02) / 0.34));
+    const projectileAlpha = 1 - smoothstep(0.40, 0.58, p);
+    const impact = clamp((p - 0.30) / 0.36);
+    const impactAlpha = fadeOut(impact, 0.56);
     effect.targets.forEach((target, index) => {
-      withEffectClip(target.bounds, () => {
-        const point = target.point;
-        drawTridentGlyph(point, 37, fire, core, impactAlpha, 1.28);
-        ellipseGlow(point.x, point.y + 10, 7 + open * 18, 5 + open * 10, fire, impactAlpha * 0.72, 1.35);
-        sparkBurst(point, 0.54 + impact * 0.36, fire, effect.seed + index * 29, 9, 24);
-      });
+      const control = {
+        x: (effect.casterHand.x + target.point.x) / 2,
+        y: Math.min(effect.casterHand.y, target.point.y) - 18 - index * 3
+      };
+      const headT = travel;
+      const tailT = Math.max(0, travel - 0.16);
+      const trail = [];
+      for (let step = 0; step <= 16; step++) {
+        trail.push(qBezier(effect.casterHand, control, target.point, lerp(tailT, headT, step / 16)));
+      }
+      const head = qBezier(effect.casterHand, control, target.point, headT);
+      if (travel < 0.995 && projectileAlpha > 0.01) {
+        trailGlow(trail, fire, projectileAlpha * 0.82, 0.72, 5);
+        discGlow(head.x, head.y, 4.3, fire, projectileAlpha * 0.92);
+        discGlow(head.x, head.y, 2.0, core, projectileAlpha * 0.96);
+        for (let ember = 0; ember < 3; ember++) {
+          const angle = p * 14 + ember * Math.PI * 2 / 3 + index;
+          discGlow(
+            head.x + Math.cos(angle) * (3.5 + ember),
+            head.y + Math.sin(angle) * (2.5 + ember * 0.7),
+            0.9 + ember * 0.35,
+            ember === 1 ? core : fire,
+            projectileAlpha * 0.62
+          );
+        }
+      }
+      if (impact > 0) {
+        withEffectClip(target.bounds, () => {
+          discGlow(target.point.x, target.point.y, 4 + (1 - impact) * 5, fire, impactAlpha * 0.78);
+          ellipseGlow(target.point.x, target.point.y, 5 + easeOut(impact) * 13, 5 + easeOut(impact) * 13, core, impactAlpha * 0.58, 0.9);
+          sparkBurst(target.point, 0.56 + impact * 0.30, fire, effect.seed + index * 29, 8, 21);
+        });
+      }
     });
   }
 
@@ -2571,7 +2637,7 @@
       })
       .filter(Boolean);
     if (!targets.length) return;
-    const duration = 920;
+    const duration = 760;
     activeEffects.push({
       id: ++effectSequence,
       kind: "blazeProc",
