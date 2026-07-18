@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI 戰鬥技能特效
 // @namespace    codex.local.mwi.combat-vfx
-// @version      0.1.10
+// @version      0.1.11
 // @description  攻擊讀條時在手前方顯示法陣，彈道同步命中，並把怪物狀態與全隊光環依實際持續時間附著在角色上。
 // @author       Local build for gzerr
 // @license      MIT
@@ -18,15 +18,16 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.1.10";
-  const CANVAS_ID = "mwiCombatVfxCanvas0110";
+  const VERSION = "0.1.11";
+  const CANVAS_ID = "mwiCombatVfxCanvas0111";
   const WS_HOSTS = ["api.milkywayidle.com/ws", "api-test.milkywayidle.com/ws"];
   const HP_TRAIL_CLASS = "mwiCombatVfxHpTrail";
-  const HP_TRAIL_DELAY = 300;
-  const HP_TRAIL_DURATION = 500;
+  const HP_TRAIL_DELAY = 90;
+  const HP_TRAIL_DURATION = 460;
+  const hpTrailStates = new WeakMap();
 
-  if (window.__mwiCombatVfx0110Installed) return;
-  window.__mwiCombatVfx0110Installed = true;
+  if (window.__mwiCombatVfx0111Installed) return;
+  window.__mwiCombatVfx0111Installed = true;
 
   const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -263,31 +264,25 @@
     return Number(numeric);
   }
 
-  // Restored from MWI-Hit-Tracker-Canvas (Artintel, BKN46, MIT), adapted to
-  // hashed class names and the current grid-based Milky Way Idle HP bar.
-  function addDamageHpTrail(unit, previousHp, currentHp) {
-    if (!unit || !(previousHp > currentHp) || currentHp < 0) return;
-    const hpBar = unit.querySelector('[class*="HitpointsBar_hitpointsBar"]');
-    const hpFront = hpBar?.querySelector('[class*="HitpointsBar_currentHp"]');
-    const hpValue = hpBar?.querySelector('[class*="HitpointsBar_hpValue"]');
-    if (!hpBar || !hpFront || !hpValue) return;
+  function readScaleX(element, fallback) {
+    const transform = window.getComputedStyle(element).transform;
+    if (!transform || transform === "none") return fallback;
+    const match = transform.match(/^matrix(?:3d)?\((.+)\)$/);
+    if (!match) return fallback;
+    const values = match[1].split(",").map(Number);
+    const scaleX = values[0];
+    return Number.isFinite(scaleX) ? clamp(scaleX) : fallback;
+  }
 
-    const maxHp = parseDisplayedMaxHp(hpValue);
-    if (!(maxHp > 0)) return;
-    const fromRatio = clamp(previousHp / maxHp);
-    const toRatio = clamp(currentHp / maxHp);
-    if (!(fromRatio > toRatio)) return;
-
-    const trail = document.createElement("div");
+  function styleDamageHpTrail(hpBar, hpFront, hpValue, trail) {
     trail.className = `${hpFront.className} ${HP_TRAIL_CLASS}`;
     Object.assign(trail.style, {
       background: "var(--color-warning, rgb(255, 91, 91))",
       width: `${hpFront.offsetWidth || hpBar.clientWidth}px`,
       height: `${hpFront.offsetHeight || hpBar.clientHeight}px`,
       transformOrigin: "left center",
-      transform: `scaleX(${fromRatio})`,
-      transition: `transform ${HP_TRAIL_DURATION}ms ease-in-out`,
-      pointerEvents: "none"
+      pointerEvents: "none",
+      willChange: "transform"
     });
 
     if (window.getComputedStyle(hpBar).display.includes("grid")) {
@@ -306,16 +301,84 @@
       hpValue.style.position = "relative";
       hpValue.style.zIndex = "2";
     }
+  }
 
-    hpBar.insertBefore(trail, hpFront);
-    window.setTimeout(() => {
-      if (trail.isConnected) trail.style.transform = `scaleX(${toRatio})`;
-    }, HP_TRAIL_DELAY);
-    window.setTimeout(() => trail.remove(), HP_TRAIL_DELAY + HP_TRAIL_DURATION + 50);
+  // Restored from MWI-Hit-Tracker-Canvas (Artintel, BKN46, MIT), adapted to
+  // hashed class names and the current grid-based Milky Way Idle HP bar. A
+  // single compositor-animated trail is reused per bar so rapid hits do not
+  // create stacks of DOM nodes and timers or jump back to an older HP value.
+  function addDamageHpTrail(unit, previousHp, currentHp) {
+    if (!unit || !(previousHp > currentHp) || currentHp < 0) return;
+    const hpBar = unit.querySelector('[class*="HitpointsBar_hitpointsBar"]');
+    const hpFront = hpBar?.querySelector('[class*="HitpointsBar_currentHp"]');
+    const hpValue = hpBar?.querySelector('[class*="HitpointsBar_hpValue"]');
+    if (!hpBar || !hpFront || !hpValue) return;
+
+    const maxHp = parseDisplayedMaxHp(hpValue);
+    if (!(maxHp > 0)) return;
+    const fromRatio = clamp(previousHp / maxHp);
+    const toRatio = clamp(currentHp / maxHp);
+    if (!(fromRatio > toRatio)) return;
+
+    let state = hpTrailStates.get(hpBar);
+    let trail = state?.trail;
+    if (!trail?.isConnected) {
+      trail = document.createElement("div");
+      styleDamageHpTrail(hpBar, hpFront, hpValue, trail);
+      hpBar.insertBefore(trail, hpFront);
+      state = { trail, animation: null, cleanupTimer: 0 };
+      hpTrailStates.set(hpBar, state);
+    } else {
+      styleDamageHpTrail(hpBar, hpFront, hpValue, trail);
+    }
+
+    const visualRatio = state.animation ? readScaleX(trail, fromRatio) : fromRatio;
+    const startRatio = clamp(Math.max(toRatio, visualRatio));
+    state.animation?.cancel();
+    if (state.cleanupTimer) window.clearTimeout(state.cleanupTimer);
+    trail.style.transition = "none";
+    trail.style.transform = `scaleX(${startRatio})`;
+
+    if (typeof trail.animate === "function") {
+      const totalDuration = HP_TRAIL_DELAY + HP_TRAIL_DURATION;
+      const animation = trail.animate([
+        { transform: `scaleX(${startRatio})`, offset: 0 },
+        {
+          transform: `scaleX(${startRatio})`,
+          offset: HP_TRAIL_DELAY / totalDuration,
+          easing: "cubic-bezier(0.16, 1, 0.3, 1)"
+        },
+        { transform: `scaleX(${toRatio})`, offset: 1 }
+      ], {
+        duration: totalDuration,
+        fill: "forwards"
+      });
+      state.animation = animation;
+      animation.onfinish = () => {
+        if (state.animation !== animation) return;
+        state.animation = null;
+        trail.remove();
+        hpTrailStates.delete(hpBar);
+      };
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      if (!trail.isConnected) return;
+      trail.style.transition = `transform ${HP_TRAIL_DURATION}ms cubic-bezier(0.16, 1, 0.3, 1) ${HP_TRAIL_DELAY}ms`;
+      trail.style.transform = `scaleX(${toRatio})`;
+    });
+    state.cleanupTimer = window.setTimeout(() => {
+      trail.remove();
+      hpTrailStates.delete(hpBar);
+    }, HP_TRAIL_DELAY + HP_TRAIL_DURATION + 50);
   }
 
   function clearDamageHpTrails() {
-    document.querySelectorAll(`.${HP_TRAIL_CLASS}`).forEach(element => element.remove());
+    document.querySelectorAll(`.${HP_TRAIL_CLASS}`).forEach(element => {
+      element.getAnimations?.().forEach(animation => animation.cancel());
+      element.remove();
+    });
   }
 
   function unitAnchor(unit, towardX = null) {
