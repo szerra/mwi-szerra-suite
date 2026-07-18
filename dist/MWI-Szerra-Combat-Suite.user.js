@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Szerra 戰鬥資訊包
 // @namespace    https://github.com/szerra/mwi-szerra-suite
-// @version      1.0.4
+// @version      1.0.5
 // @description  整合戰鬥 HUD、升級時間、模擬器匯入、掉落統計與戰鬥特效；可從 Tampermonkey 選單逐項開關。
 // @author       Szerra integration; see THIRD_PARTY_NOTICES.md
 // @license      CC-BY-NC-SA-4.0
@@ -124,7 +124,7 @@
 
   // ---------------------------------------------------------------------------
   // Module: 戰鬥技能特效
-  // Original: MWI 戰鬥技能特效.user.js v0.1.11
+  // Original: MWI 戰鬥技能特效.user.js v0.1.12
   // Author: Local build for gzerr
   // License: MIT
   // Source: https://github.com/szerra/mwi-combat-vfx
@@ -134,16 +134,16 @@
     (function () {
       "use strict";
     
-      const VERSION = "0.1.11";
-      const CANVAS_ID = "mwiCombatVfxCanvas0111";
+      const VERSION = "0.1.12";
+      const CANVAS_ID = "mwiCombatVfxCanvas0112";
       const WS_HOSTS = ["api.milkywayidle.com/ws", "api-test.milkywayidle.com/ws"];
       const HP_TRAIL_CLASS = "mwiCombatVfxHpTrail";
       const HP_TRAIL_DELAY = 90;
       const HP_TRAIL_DURATION = 460;
       const hpTrailStates = new WeakMap();
     
-      if (window.__mwiCombatVfx0111Installed) return;
-      window.__mwiCombatVfx0111Installed = true;
+      if (window.__mwiCombatVfx0112Installed) return;
+      window.__mwiCombatVfx0112Installed = true;
     
       const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
       const lerp = (a, b, t) => a + (b - a) * t;
@@ -232,6 +232,31 @@
         "/abilities/revive",
         "/abilities/life_drain"
       ]);
+      // Ripple restores 10 MP in the same update that pays the completed
+      // ability's mana cost. These live costs let us distinguish a real proc
+      // from the separate food/drink regeneration updates without rolling the
+      // displayed proc chance ourselves.
+      const ABILITY_MANA_COSTS = Object.freeze({
+        "/abilities/water_strike": 10,
+        "/abilities/ice_spear": 45,
+        "/abilities/frost_surge": 75,
+        "/abilities/mana_spring": 75,
+        "/abilities/entangle": 10,
+        "/abilities/toxic_pollen": 45,
+        "/abilities/natures_veil": 75,
+        "/abilities/life_drain": 45,
+        "/abilities/fireball": 10,
+        "/abilities/flame_blast": 45,
+        "/abilities/firestorm": 75,
+        "/abilities/smoke_burst": 75,
+        "/abilities/elemental_affinity": 65,
+        "/abilities/critical_aura": 100,
+        "/abilities/fierce_aura": 100,
+        "/abilities/guardian_aura": 100,
+        "/abilities/mystic_aura": 100,
+        "/abilities/speed_aura": 100
+      });
+      const observedAbilityManaCosts = new Map();
       const STYLE_ROUTES = Object.freeze({
         weapon: "weapon",
         poke: "thrust", impale: "thrust", puncture: "thrust", penetratingStrike: "thrust",
@@ -317,6 +342,8 @@
       let playerCritCounter = [];
       let playerPreparingAbility = [];
       let playerBloomChance = [];
+      let playerRippleChance = [];
+      let playerBlazeChance = [];
       let pendingMonsterCasts = new Map();
     
       function ensureCanvas() {
@@ -523,6 +550,42 @@
         };
       }
     
+      function unitEffectBounds(unit) {
+        if (!unit) return null;
+        const model = unit.querySelector('[class*="CombatUnit_unitIconContainer"]')
+          || unit.querySelector('[class*="CombatUnit_monsterIcon"]')
+          || unit.querySelector('[class*="CombatUnit_model"]')
+          || unit;
+        const modelRect = model.getBoundingClientRect();
+        const unitRect = unit.getBoundingClientRect();
+        return {
+          left: Math.max(unitRect.left + 2, modelRect.left - 2),
+          top: Math.max(unitRect.top + 2, modelRect.top - 2),
+          right: Math.min(unitRect.right - 2, modelRect.right + 2),
+          bottom: Math.min(unitRect.bottom - 2, modelRect.bottom + 2)
+        };
+      }
+    
+      function withEffectClip(bounds, draw) {
+        if (!bounds) return draw();
+        const width = Math.max(1, bounds.right - bounds.left);
+        const height = Math.max(1, bounds.bottom - bounds.top);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(bounds.left, bounds.top, width, height);
+        ctx.clip();
+        draw();
+        ctx.restore();
+      }
+    
+      function procHandPoint(anchor) {
+        if (!anchor) return null;
+        return {
+          x: anchor.x + clamp(anchor.width * 0.23, 15, 24),
+          y: anchor.y + clamp(anchor.height * 0.03, 1, 5)
+        };
+      }
+    
       function targetBodyPoint(target, yOffset = 0) {
         return {
           x: target.point.x,
@@ -563,6 +626,36 @@
         ctx.lineWidth = Math.max(0.8, width * 0.28);
         ctx.stroke();
         ctx.restore();
+      }
+    
+      function drawTridentGlyph(center, height, color, accent, alpha, width = 1.45) {
+        if (!center || alpha <= 0) return;
+        const half = height / 2;
+        const top = center.y - half;
+        const bottom = center.y + half;
+        const shoulderY = top + height * 0.30;
+        const outer = height * 0.22;
+        const tine = height * 0.22;
+    
+        pathGlow([
+          { x: center.x, y: bottom },
+          { x: center.x, y: top + height * 0.12 }
+        ], color, alpha, width, 7);
+        pathGlow([
+          { x: center.x, y: shoulderY + height * 0.08 },
+          { x: center.x - outer, y: shoulderY },
+          { x: center.x - outer, y: shoulderY - tine }
+        ], accent, alpha * 0.94, width * 0.86, 6);
+        pathGlow([
+          { x: center.x, y: shoulderY + height * 0.08 },
+          { x: center.x + outer, y: shoulderY },
+          { x: center.x + outer, y: shoulderY - tine }
+        ], accent, alpha * 0.94, width * 0.86, 6);
+        pathGlow([
+          { x: center.x, y: top + height * 0.23 },
+          { x: center.x, y: top }
+        ], accent, alpha, width * 0.92, 7);
+        discGlow(center.x, center.y + height * 0.05, height * 0.08, color, alpha * 0.36);
       }
     
       // 彈道專用：保留亮芯，但外光比一般符號與爆炸線條窄，避免拖尾變成粗光柱。
@@ -776,6 +869,22 @@
         ctx.restore();
       }
     
+      function drawProcText(text, x, y, color, outline, alpha, size = 18) {
+        if (!text || alpha <= 0) return;
+        ctx.save();
+        ctx.globalCompositeOperation = "source-over";
+        ctx.font = `900 ${size}px Arial, sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.lineJoin = "round";
+        ctx.lineWidth = Math.max(3, size * 0.22);
+        ctx.strokeStyle = rgba(outline, alpha * 0.96);
+        ctx.strokeText(text, x, y);
+        ctx.fillStyle = rgba(color, alpha);
+        ctx.fillText(text, x, y);
+        ctx.restore();
+      }
+    
       function drawBloomHeal(effect, p) {
         const target = effect.targets[0];
         if (!target) return;
@@ -783,108 +892,131 @@
         const accent = COLORS.teal;
         const flower = [158, 255, 188];
         const targetPoint = target.point;
-        const travel = easeInOut(clamp(p / 0.34));
-        const trailAlpha = (1 - smoothstep(0.42, 0.78, p)) * 0.92;
-        const sameTarget = effect.casterIndex === target.index;
+        const alpha = fadeOut(p, 0.75);
+        const handAlpha = alpha * (0.72 + 0.28 * Math.sin(Math.PI * clamp(p / 0.7)));
     
-        for (let stream = 0; stream < 3; stream++) {
-          const phase = stream - 1;
-          let control;
-          if (sameTarget) {
-            control = {
-              x: effect.start.x + (32 + stream * 8) * (stream === 1 ? -1 : 1),
-              y: Math.min(effect.start.y, targetPoint.y) - 42 - stream * 8
-            };
-          } else {
-            control = {
-              x: (effect.start.x + targetPoint.x) / 2,
-              y: Math.min(effect.start.y, targetPoint.y) - 34 + phase * 16
-            };
+        // The weapon mark belongs to the caster. Keep it small, in front of the
+        // hand and clipped to that player's portrait so it never covers a teammate.
+        withEffectClip(effect.casterBounds, () => {
+          drawTridentGlyph(effect.casterHand, 44, color, flower, handAlpha, 1.35);
+          discGlow(effect.casterHand.x, effect.casterHand.y, 5.5, accent, handAlpha * 0.42);
+          for (let i = 0; i < 5; i++) {
+            const angle = i * Math.PI * 2 / 5 + p * 1.2;
+            const radius = 10 + 5 * easeOut(p);
+            bloomPetal(
+              effect.casterHand.x + Math.cos(angle) * radius,
+              effect.casterHand.y + Math.sin(angle) * radius,
+              angle,
+              5,
+              1.6,
+              i % 2 ? flower : accent,
+              handAlpha * 0.58
+            );
           }
-          const headT = clamp(travel - stream * 0.035);
-          const tailT = Math.max(0, headT - 0.30);
-          const points = [];
-          for (let i = 0; i <= 20; i++) {
-            const t = lerp(tailT, headT, i / 20);
-            const point = qBezier(effect.start, control, targetPoint, t);
-            const wave = Math.sin(t * Math.PI * 4 + stream * 2.1) * (3.5 - t * 2.2);
-            points.push({ x: point.x, y: point.y + wave });
-          }
-          trailGlow(points, stream === 1 ? accent : color, trailAlpha * (0.72 + stream * 0.1), 1.0 + stream * 0.14, 7);
-          if (headT > 0.08 && headT < 0.98) {
-            const head = qBezier(effect.start, control, targetPoint, headT);
-            bloomPetal(head.x, head.y, headT * 8 + stream * 2.1, 7, 2.5, flower, trailAlpha * 0.78);
-          }
-        }
+        });
     
-        const bloom = clamp((p - 0.16) / 0.40);
-        const alpha = fadeOut(p, 0.76);
-        if (bloom <= 0 || alpha <= 0) return;
+        const bloom = clamp((p - 0.10) / 0.44);
+        const bloomAlpha = fadeOut(p, 0.76);
+        if (bloom <= 0 || bloomAlpha <= 0) return;
         const open = easeOut(bloom);
-        const center = { x: targetPoint.x, y: targetPoint.y + 5 };
-        const groundY = target.anchor?.groundY ?? targetPoint.y + 34;
+        const center = { x: targetPoint.x, y: targetPoint.y + 8 };
     
-        ellipseGlow(center.x, groundY, 18 + open * 30, 5 + open * 8, accent, alpha * 0.72, 1.7, p * 1.8);
-        ellipseGlow(center.x, groundY, 10 + open * 20, 3 + open * 5, COLORS.water, alpha * 0.64, 1.2, -p * 2.1);
-        discGlow(center.x, center.y, 9 + open * 9, color, alpha * 0.68);
-    
-        for (let i = 0; i < 8; i++) {
-          const angle = i * Math.PI / 4 + p * 0.55;
-          const radius = 7 + open * 13;
-          bloomPetal(
-            center.x + Math.cos(angle) * radius * 0.45,
-            center.y + Math.sin(angle) * radius * 0.28,
-            angle,
-            7 + open * 13,
-            2.6 + open * 3.1,
-            i % 2 ? flower : accent,
-            alpha * (0.62 + open * 0.34)
-          );
-        }
-    
-        const rise = easeOut(clamp((p - 0.22) / 0.48));
-        const tridentX = center.x;
-        const tridentTop = center.y - 18 - rise * 25;
-        const tridentBottom = center.y + 22 - rise * 10;
-        pathGlow([{ x: tridentX, y: tridentBottom }, { x: tridentX, y: tridentTop }], accent, alpha * 0.9, 2.2, 9);
-        pathGlow([{ x: tridentX, y: tridentTop + 9 }, { x: tridentX, y: tridentTop - 8 }], flower, alpha, 2.1, 9);
-        pathGlow([
-          { x: tridentX, y: tridentTop + 8 },
-          { x: tridentX - 10, y: tridentTop + 1 },
-          { x: tridentX - 10, y: tridentTop - 7 }
-        ], flower, alpha * 0.88, 1.8, 8);
-        pathGlow([
-          { x: tridentX, y: tridentTop + 8 },
-          { x: tridentX + 10, y: tridentTop + 1 },
-          { x: tridentX + 10, y: tridentTop - 7 }
-        ], flower, alpha * 0.88, 1.8, 8);
-    
-        for (let i = 0; i < 12; i++) {
-          const lane = rand(effect.seed, i) - 0.5;
-          const local = (p * (0.75 + rand(effect.seed + 11, i) * 0.5) + rand(effect.seed + 23, i)) % 1;
-          const x = center.x + lane * 70 + Math.sin(local * Math.PI * 3 + i) * 5;
-          const y = groundY - local * (45 + rand(effect.seed + 31, i) * 35);
-          const particleColor = i % 3 === 0 ? COLORS.water : (i % 2 ? accent : flower);
-          discGlow(x, y, 1.7 + rand(effect.seed + 41, i) * 2.3, particleColor, alpha * (1 - local) * 0.72);
-        }
+        // The receiver gets only a compact local heal bloom. No projectile crosses
+        // the party and no second trident covers the healed character.
+        withEffectClip(target.bounds, () => {
+          discGlow(center.x, center.y, 7 + open * 7, color, bloomAlpha * 0.60);
+          for (let i = 0; i < 8; i++) {
+            const angle = i * Math.PI / 4 + p * 0.55;
+            const radius = 5 + open * 10;
+            bloomPetal(
+              center.x + Math.cos(angle) * radius * 0.52,
+              center.y + Math.sin(angle) * radius * 0.34,
+              angle,
+              6 + open * 9,
+              2.0 + open * 2.3,
+              i % 2 ? flower : accent,
+              bloomAlpha * (0.56 + open * 0.28)
+            );
+          }
+        });
     
         if (p > 0.28) {
           const local = clamp((p - 0.28) / 0.55);
           const textAlpha = 1 - smoothstep(0.64, 1, local);
-          ctx.save();
-          ctx.globalCompositeOperation = "source-over";
-          ctx.font = "900 20px Arial, sans-serif";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.lineJoin = "round";
-          ctx.lineWidth = 5;
           const y = targetPoint.y - 38 - easeOut(local) * 22;
-          ctx.strokeStyle = rgba([23, 73, 55], textAlpha * 0.96);
-          ctx.strokeText(`+${Math.round(effect.healing)}`, targetPoint.x, y);
-          ctx.fillStyle = rgba([174, 255, 204], textAlpha);
-          ctx.fillText(`+${Math.round(effect.healing)}`, targetPoint.x, y);
-          ctx.restore();
+          withEffectClip(target.bounds, () => {
+            drawProcText(`+${Math.round(effect.healing)}`, targetPoint.x, y, [174, 255, 204], [23, 73, 55], textAlpha, 19);
+          });
         }
+      }
+    
+      function drawRippleProc(effect, p) {
+        const color = [71, 166, 255];
+        const accent = [177, 241, 255];
+        const alpha = fadeOut(p, 0.76);
+        const open = easeOut(clamp(p / 0.55));
+        withEffectClip(effect.casterBounds, () => {
+          drawTridentGlyph(effect.casterHand, 43, color, accent, alpha, 1.35);
+          discGlow(effect.casterHand.x, effect.casterHand.y, 5.5, color, alpha * 0.44);
+          const groundY = effect.sourceAnchor.groundY;
+          ellipseGlow(effect.sourceAnchor.x, groundY, 10 + open * 22, 3 + open * 5, color, alpha * 0.72, 1.45);
+          ellipseGlow(effect.sourceAnchor.x, groundY, 6 + open * 14, 2 + open * 3, accent, alpha * 0.58, 1.05);
+    
+          ctx.save();
+          ctx.globalCompositeOperation = "lighter";
+          ctx.strokeStyle = rgba(accent, alpha * 0.84);
+          ctx.shadowColor = rgba(color, alpha);
+          ctx.shadowBlur = 7;
+          ctx.lineWidth = 1.5;
+          const radius = 15 + open * 4;
+          for (let ring = 0; ring < 2; ring++) {
+            const start = -Math.PI * 0.18 + ring * Math.PI;
+            const end = start - Math.PI * (0.9 + open * 0.55);
+            ctx.beginPath();
+            ctx.arc(effect.sourceAnchor.x, effect.sourceAnchor.y, radius + ring * 7, start, end, true);
+            ctx.stroke();
+            const hx = effect.sourceAnchor.x + Math.cos(end) * (radius + ring * 7);
+            const hy = effect.sourceAnchor.y + Math.sin(end) * (radius + ring * 7);
+            ctx.beginPath();
+            ctx.moveTo(hx, hy);
+            ctx.lineTo(hx + 5, hy - 2);
+            ctx.lineTo(hx + 2, hy + 4);
+            ctx.closePath();
+            ctx.fillStyle = rgba(accent, alpha * 0.86);
+            ctx.fill();
+          }
+          ctx.restore();
+    
+          if (p > 0.18) {
+            const textLocal = clamp((p - 0.18) / 0.62);
+            const textAlpha = 1 - smoothstep(0.62, 1, textLocal);
+            const y = Math.max(effect.casterBounds.top + 12, effect.sourceAnchor.y - 30 - easeOut(textLocal) * 13);
+            drawProcText("+10 MP", effect.sourceAnchor.x, y, accent, [17, 58, 106], textAlpha, 15);
+          }
+        });
+      }
+    
+      function drawBlazeProc(effect, p) {
+        const fire = [255, 91, 24];
+        const core = [255, 224, 123];
+        const alpha = fadeOut(p, 0.76);
+        withEffectClip(effect.casterBounds, () => {
+          drawTridentGlyph(effect.casterHand, 43, fire, core, alpha, 1.35);
+          discGlow(effect.casterHand.x, effect.casterHand.y, 5.5, fire, alpha * 0.46);
+        });
+    
+        const impact = clamp((p - 0.12) / 0.58);
+        if (impact <= 0) return;
+        const impactAlpha = fadeOut(impact, 0.58);
+        const open = easeOut(impact);
+        effect.targets.forEach((target, index) => {
+          withEffectClip(target.bounds, () => {
+            const point = target.point;
+            drawTridentGlyph(point, 37, fire, core, impactAlpha, 1.28);
+            ellipseGlow(point.x, point.y + 10, 7 + open * 18, 5 + open * 10, fire, impactAlpha * 0.72, 1.35);
+            sparkBurst(point, 0.54 + impact * 0.36, fire, effect.seed + index * 29, 9, 24);
+          });
+        });
       }
     
       function projectileCurve(effect, target, p, height = 28) {
@@ -1821,6 +1953,10 @@
           drawCastingEffect(effect, p);
         } else if (effect.kind === "bloomHeal") {
           drawBloomHeal(effect, p);
+        } else if (effect.kind === "rippleProc") {
+          drawRippleProc(effect, p);
+        } else if (effect.kind === "blazeProc") {
+          drawBlazeProc(effect, p);
         } else if (effect.enemy) {
           drawEnemyAttack(effect, p);
         } else {
@@ -1833,7 +1969,7 @@
           else if (route === "magic") drawMagicProjectile(effect, p, style);
         }
         ctx.restore();
-        if (effect.kind !== "cast" && effect.kind !== "bloomHeal") drawDamage(effect, p);
+        if (!effect.kind) drawDamage(effect, p);
         return p < 1;
       }
     
@@ -2016,18 +2152,88 @@
         requestRender();
       }
     
+      function spawnRippleProc(casterIndex, rippleChance) {
+        if (pageHidden) return;
+        const { players } = findCombatUnits();
+        const caster = players[casterIndex];
+        if (!caster) return;
+        const sourceAnchor = unitAnchor(caster);
+        const casterBounds = unitEffectBounds(caster);
+        const casterHand = procHandPoint(sourceAnchor);
+        if (!sourceAnchor || !casterBounds || !casterHand) return;
+        const duration = 1080;
+        activeEffects.push({
+          id: ++effectSequence,
+          kind: "rippleProc",
+          casterIndex,
+          rippleChance,
+          profile: { style: "rippleProc", color: [71, 166, 255], duration },
+          sourceAnchor,
+          casterBounds,
+          casterHand,
+          seed: effectSequence * 163 + casterIndex * 41,
+          duration,
+          startedAt: performance.now() - 110
+        });
+        requestRender();
+      }
+    
+      function spawnBlazeProc(casterIndex, targetIndices, blazeChance) {
+        if (pageHidden || !targetIndices.length) return;
+        const { players, monsters } = findCombatUnits();
+        const caster = players[casterIndex];
+        if (!caster) return;
+        const sourceAnchor = unitAnchor(caster);
+        const casterBounds = unitEffectBounds(caster);
+        const casterHand = procHandPoint(sourceAnchor);
+        if (!sourceAnchor || !casterBounds || !casterHand) return;
+        const targets = targetIndices
+          .filter(index => monsters[index])
+          .map(index => {
+            const anchor = unitAnchor(monsters[index]);
+            const bounds = unitEffectBounds(monsters[index]);
+            if (!anchor || !bounds) return null;
+            return {
+              index,
+              anchor,
+              bounds,
+              point: { x: anchor.x, y: anchor.y + 2 }
+            };
+          })
+          .filter(Boolean);
+        if (!targets.length) return;
+        const duration = 920;
+        activeEffects.push({
+          id: ++effectSequence,
+          kind: "blazeProc",
+          casterIndex,
+          blazeChance,
+          profile: { style: "blazeProc", color: [255, 91, 24], duration },
+          sourceAnchor,
+          casterBounds,
+          casterHand,
+          targets,
+          seed: effectSequence * 179 + casterIndex * 43,
+          duration,
+          startedAt: performance.now() - 90
+        });
+        requestRender();
+      }
+    
       function spawnBloomHeal(casterIndex, targetIndex, healing, bloomChance) {
         if (pageHidden || !(healing > 0)) return;
         const { players } = findCombatUnits();
         const caster = players[casterIndex];
         const target = players[targetIndex];
         if (!caster || !target) return;
-        const targetRect = target.getBoundingClientRect();
         const targetAnchor = unitAnchor(target);
-        const sourceAnchor = unitAnchor(caster, targetRect.left + targetRect.width / 2);
+        const sourceAnchor = unitAnchor(caster);
         if (!sourceAnchor || !targetAnchor) return;
         const targetPoint = { x: targetAnchor.x, y: targetAnchor.y };
-        const start = frontCastPoint(sourceAnchor, targetPoint);
+        const casterBounds = unitEffectBounds(caster);
+        const casterHand = procHandPoint(sourceAnchor);
+        const targetBounds = unitEffectBounds(target);
+        if (!casterBounds || !casterHand || !targetBounds) return;
         const duration = 1220;
         activeEffects.push({
           id: ++effectSequence,
@@ -2037,11 +2243,18 @@
           healing,
           profile: { style: "bloomHeal", color: [76, 235, 145], duration },
           sourceAnchor,
-          start: { x: start.x, y: start.y },
-          targets: [{ index: targetIndex, healing, anchor: targetAnchor, point: targetPoint }],
+          casterBounds,
+          casterHand,
+          targets: [{
+            index: targetIndex,
+            healing,
+            anchor: targetAnchor,
+            bounds: targetBounds,
+            point: targetPoint
+          }],
           seed: effectSequence * 149 + casterIndex * 37 + targetIndex * 59,
           duration,
-          // 封包到達時補血已經發生，讓藤蔓水流正在抵達，避免特效落後血量變化。
+          // 封包到達時補血已經發生，讓手前方綠叉與目標花朵立刻進入可見階段。
           startedAt: performance.now() - duration * 0.22
         });
         requestRender();
@@ -2255,6 +2468,44 @@
         requestRender();
       }
     
+      function didRippleProc(abilityHrid, previousMp, currentMp) {
+        if (!Number.isFinite(previousMp) || !Number.isFinite(currentMp)) return false;
+        const manaSpent = previousMp - currentMp;
+        const fixedCost = ABILITY_MANA_COSTS[abilityHrid];
+        const observedCost = observedAbilityManaCosts.get(abilityHrid);
+        const expectedCost = Number.isFinite(fixedCost) ? fixedCost : observedCost;
+        const procSpent = Number.isFinite(expectedCost) ? Math.max(0, expectedCost - 10) : NaN;
+        const proc = Number.isFinite(procSpent) && Math.abs(manaSpent - procSpent) < 0.01;
+    
+        // Unknown abilities become detectable after one ordinary cast establishes
+        // their full cost. Keep the largest observed spend because a Ripple cast is
+        // exactly 10 lower than the normal value.
+        if (!Number.isFinite(fixedCost) && manaSpent > 0) {
+          observedAbilityManaCosts.set(abilityHrid, Math.max(observedCost || 0, manaSpent));
+        }
+        return proc;
+      }
+    
+      function hasBlazeProcSignature(cast, aliveMonsterIndices, monsterSplats, primaryMonsterIndex) {
+        if (!cast || !aliveMonsterIndices.length || !monsterSplats.length) return false;
+        const counts = new Map(monsterSplats.map(splat => [splat.index, splat.count]));
+        const profile = PROFILES[cast.abilityHrid];
+        const isAttack = ATTACK_ABILITIES.has(cast.abilityHrid);
+        const chainTargets = profile?.chain ? new Set(aliveMonsterIndices.slice(0, 2)) : null;
+    
+        // A Blaze proc adds one damage-splat attempt to every living monster.
+        // Account for the completed base ability's own attempts, then require the
+        // extra all-enemy layer. This matches both hits and misses because the
+        // server increments dmgCounter for either result.
+        return aliveMonsterIndices.every(index => {
+          let required = 1;
+          if (isAttack && profile?.area) required += 1;
+          else if (isAttack && profile?.chain && chainTargets.has(index)) required += 1;
+          else if (isAttack && !profile?.area && !profile?.chain && index === primaryMonsterIndex) required += 1;
+          return numberOr(counts.get(index), 0) >= required;
+        });
+      }
+    
       function clearPendingCasts(casts) {
         for (const cast of casts.values()) {
           if (cast.missTimer) clearTimeout(cast.missTimer);
@@ -2318,6 +2569,8 @@
           playerCritCounter = obj.players.map(player => numberOr(player.criticalDamageSplatCounter, 0));
           playerPreparingAbility = obj.players.map(player => normalizePreparingAbility(player.preparingAbilityHrid));
           playerBloomChance = obj.players.map(player => numberOr(player?.combatDetails?.combatStats?.bloom, 0));
+          playerRippleChance = obj.players.map(player => numberOr(player?.combatDetails?.combatStats?.ripple, 0));
+          playerBlazeChance = obj.players.map(player => numberOr(player?.combatDetails?.combatStats?.blaze, 0));
           clearPendingCasts(pendingMonsterCasts);
           activeEffects = [];
           attachedStatuses.clear();
@@ -2345,6 +2598,9 @@
         // Player single-target attacks focus the first monster that was alive when
         // the server processed this update.  Capture it before applying the new HP
         // values, otherwise a killing blow would incorrectly jump to the next unit.
+        const aliveMonsterIndicesBeforeUpdate = monsterHp
+          .map((hp, index) => hp > 0 ? index : -1)
+          .filter(index => index >= 0);
         const primaryMonsterIndexBeforeUpdate = choosePrimaryMonsterTarget();
     
         const now = performance.now();
@@ -2355,6 +2611,8 @@
         const completedPlayerCasts = [];
         const completedAuraCasts = [];
         const completedBloomCasts = [];
+        const completedRippleCasts = [];
+        const completedBlazeCasts = [];
         for (const [key, player] of playerEntries) {
           const index = Number(key);
           const buffMap = findCombatBuffMap(player);
@@ -2377,6 +2635,18 @@
             if (bloomChance > 0 && completedAbility !== "autoAttack" && !DIRECT_HEAL_ABILITIES.has(completedAbility)) {
               completedBloomCasts.push({ index, abilityHrid: completedAbility, bloomChance });
             }
+            const rippleChance = numberOr(playerRippleChance[index], 0);
+            if (
+              rippleChance > 0
+              && completedAbility !== "autoAttack"
+              && didRippleProc(completedAbility, previousMp, currentMp)
+            ) {
+              completedRippleCasts.push({ index, abilityHrid: completedAbility, rippleChance });
+            }
+            const blazeChance = numberOr(playerBlazeChance[index], 0);
+            if (blazeChance > 0 && completedAbility !== "autoAttack") {
+              completedBlazeCasts.push({ index, abilityHrid: completedAbility, blazeChance });
+            }
             const nextAbility = normalizePreparingAbility(abilityHrid);
             playerPreparingAbility[index] = nextAbility;
             spawnCastEffect(index, nextAbility, player.int);
@@ -2386,6 +2656,7 @@
         }
     
         for (const cast of completedAuraCasts) applyInferredAura(cast.index, cast.abilityHrid);
+        for (const cast of completedRippleCasts) spawnRippleProc(cast.index, cast.rippleChance);
     
         for (const [key, monster] of monsterEntries) {
           const index = Number(key);
@@ -2425,6 +2696,17 @@
           if (Number.isFinite(currentHp)) monsterHp[index] = currentHp;
           if (Number.isFinite(currentDmg)) monsterDmgCounter[index] = currentDmg;
           if (Number.isFinite(currentCrit)) monsterCritCounter[index] = currentCrit;
+        }
+    
+        for (const cast of completedBlazeCasts) {
+          if (hasBlazeProcSignature(
+            cast,
+            aliveMonsterIndicesBeforeUpdate,
+            monsterSplats,
+            primaryMonsterIndexBeforeUpdate
+          )) {
+            spawnBlazeProc(cast.index, aliveMonsterIndicesBeforeUpdate, cast.blazeChance);
+          }
         }
     
         if (completedPlayerCasts.length) {
