@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Szerra 戰鬥資訊包
 // @namespace    https://github.com/szerra/mwi-szerra-suite
-// @version      1.0.9
+// @version      1.0.10
 // @description  整合戰鬥 HUD、升級時間、模擬器匯入、掉落統計與戰鬥特效；可從 Tampermonkey 選單逐項開關。
 // @author       Szerra integration; see THIRD_PARTY_NOTICES.md
 // @license      CC-BY-NC-SA-4.0
@@ -124,7 +124,7 @@
 
   // ---------------------------------------------------------------------------
   // Module: 戰鬥技能特效
-  // Original: MWI 戰鬥技能特效.user.js v0.1.16
+  // Original: MWI 戰鬥技能特效.user.js v0.1.17
   // Author: Local build for gzerr
   // License: MIT
   // Source: https://github.com/szerra/mwi-combat-vfx
@@ -134,8 +134,8 @@
     (function () {
       "use strict";
     
-      const VERSION = "0.1.16";
-      const CANVAS_ID = "mwiCombatVfxCanvas0116";
+      const VERSION = "0.1.17";
+      const CANVAS_ID = "mwiCombatVfxCanvas0117";
       const MONSTER_UNIT_CLASS = "mwiCombatVfxMonsterUnit";
       const ORIGINAL_SPLAT_STYLE_ID = "mwiCombatVfxOriginalMonsterSplatStyle";
       const WS_HOSTS = ["api.milkywayidle.com/ws", "api-test.milkywayidle.com/ws"];
@@ -144,8 +144,8 @@
       const HP_TRAIL_DURATION = 460;
       const hpTrailStates = new WeakMap();
     
-      if (window.__mwiCombatVfx0116Installed) return;
-      window.__mwiCombatVfx0116Installed = true;
+      if (window.__mwiCombatVfx0117Installed) return;
+      window.__mwiCombatVfx0117Installed = true;
     
       const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
       const lerp = (a, b, t) => a + (b - a) * t;
@@ -234,6 +234,12 @@
         "/abilities/revive",
         "/abilities/life_drain"
       ]);
+      const HEAL_PROFILES = Object.freeze({
+        "/abilities/minor_heal": { style: "minorHeal", color: [76, 238, 133], duration: 760, group: false },
+        "/abilities/heal": { style: "heal", color: [92, 245, 146], duration: 860, group: false },
+        "/abilities/quick_aid": { style: "quickAid", color: [70, 235, 124], duration: 1080, group: false },
+        "/abilities/rejuvenate": { style: "rejuvenate", color: [112, 255, 159], duration: 1220, group: true }
+      });
       // Ripple restores 10 MP in the same update that pays the completed
       // ability's mana cost. These live costs let us distinguish a real proc
       // from the separate food/drink regeneration updates without rolling the
@@ -995,6 +1001,109 @@
         }
       }
     
+      function drawHealingCross(x, y, size, color, alpha, width = 1.15) {
+        if (alpha <= 0.01) return;
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.translate(x, y);
+        ctx.strokeStyle = rgba(color, alpha);
+        ctx.shadowColor = rgba(color, alpha);
+        ctx.shadowBlur = 6;
+        ctx.lineWidth = width;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(0, -size);
+        ctx.lineTo(0, size);
+        ctx.moveTo(-size, 0);
+        ctx.lineTo(size, 0);
+        ctx.stroke();
+        ctx.restore();
+      }
+    
+      function drawStillHealCrosses(target, p, seed, crossSize, count) {
+        const anchor = target.anchor;
+        const bounds = target.bounds;
+        if (!anchor || !bounds) return;
+        const width = Math.max(28, bounds.right - bounds.left);
+        const height = Math.max(42, bounds.bottom - bounds.top);
+        const centerY = anchor.y + Math.min(7, height * 0.08);
+    
+        for (let i = 0; i < count; i++) {
+          const delay = rand(seed + 11, i) * 0.18;
+          const local = clamp((p - delay) / Math.max(0.01, 1 - delay));
+          const alpha = smoothstep(0, 0.12, local) * (1 - smoothstep(0.62, 1, local));
+          if (alpha <= 0.01) continue;
+          const angle = rand(seed + 23, i) * Math.PI * 2;
+          const radiusX = (0.24 + rand(seed + 37, i) * 0.72) * Math.min(42, width * 0.42);
+          const radiusY = (0.20 + rand(seed + 53, i) * 0.70) * Math.min(34, height * 0.35);
+          const x = anchor.x + Math.cos(angle) * radiusX;
+          const y = centerY + Math.sin(angle) * radiusY - Math.sin(local * Math.PI) * 3;
+          const size = crossSize * (0.78 + rand(seed + 71, i) * 0.44) * (0.82 + Math.sin(local * Math.PI) * 0.18);
+          drawHealingCross(x, y, size, i % 4 ? [91, 255, 145] : [190, 255, 211], alpha * 0.94, Math.max(0.8, size * 0.27));
+        }
+      }
+    
+      function drawRisingHeal(target, p, seed, crossSize, crossCount) {
+        const anchor = target.anchor;
+        const bounds = target.bounds;
+        if (!anchor || !bounds) return;
+        const overallAlpha = smoothstep(0, 0.08, p) * fadeOut(p, 0.72);
+        const bottom = Math.min(bounds.bottom - 4, Number.isFinite(anchor.groundY) ? anchor.groundY : bounds.bottom - 5);
+        const top = Math.max(bounds.top + 7, anchor.y - Math.min(38, anchor.height * 0.42));
+        const height = Math.max(34, bottom - top);
+        const radius = Math.min(22, Math.max(13, (bounds.right - bounds.left) * 0.20));
+        const head = easeOut(clamp(p / 0.76));
+        const tail = Math.max(0, head - 0.54);
+    
+        for (let strand = 0; strand < 3; strand++) {
+          const points = [];
+          for (let step = 0; step <= 24; step++) {
+            const t = lerp(tail, head, step / 24);
+            const angle = t * Math.PI * 4.2 + strand * Math.PI * 2 / 3 + seed * 0.017;
+            points.push({
+              x: anchor.x + Math.sin(angle) * radius * (0.72 + strand * 0.08),
+              y: bottom - t * height
+            });
+          }
+          pathGlow(
+            points,
+            strand === 1 ? [184, 255, 204] : [63, 235, 119],
+            overallAlpha * (0.62 + strand * 0.08),
+            0.78 + strand * 0.08,
+            5
+          );
+        }
+    
+        for (let i = 0; i < crossCount; i++) {
+          const delay = rand(seed + 97, i) * 0.28;
+          const local = clamp((p - delay) / Math.max(0.08, 0.78 - delay));
+          const alpha = smoothstep(0, 0.10, local) * (1 - smoothstep(0.70, 1, local)) * fadeOut(p, 0.82);
+          if (alpha <= 0.01) continue;
+          const lane = (rand(seed + 113, i) - 0.5) * radius * 2.45;
+          const sway = Math.sin(local * Math.PI * 3 + i * 1.7) * 3;
+          const x = anchor.x + lane + sway;
+          const y = bottom - easeOut(local) * height;
+          const size = crossSize * (0.82 + rand(seed + 131, i) * 0.38);
+          drawHealingCross(x, y, size, i % 3 ? [91, 255, 145] : [205, 255, 219], alpha * 0.96, Math.max(0.9, size * 0.25));
+        }
+      }
+    
+      function drawDirectHeal(effect, p) {
+        for (const target of effect.targets) {
+          withEffectClip(target.bounds, () => {
+            if (effect.profile.style === "minorHeal") {
+              drawStillHealCrosses(target, p, effect.seed + target.index * 43, 2.7, 14);
+            } else if (effect.profile.style === "heal") {
+              drawStillHealCrosses(target, p, effect.seed + target.index * 43, 5.0, 12);
+            } else if (effect.profile.style === "quickAid") {
+              drawRisingHeal(target, p, effect.seed + target.index * 47, 3.4, 11);
+            } else if (effect.profile.style === "rejuvenate") {
+              drawRisingHeal(target, p, effect.seed + target.index * 47, 5.8, 11);
+            }
+          });
+        }
+      }
+    
       function drawBloomHeal(effect, p) {
         const target = effect.targets[0];
         if (!target) return;
@@ -1004,10 +1113,9 @@
         const alpha = fadeOut(p, 0.75);
         const handAlpha = alpha * (0.72 + 0.28 * Math.sin(Math.PI * clamp(p / 0.7)));
     
-        // The weapon mark belongs to the caster. Keep it small, in front of the
-        // hand and clipped to that player's portrait so it never covers a teammate.
+        // Keep only a compact hand glow. The proc-specific trident marker is
+        // intentionally omitted so the rain itself is the weapon feedback.
         withEffectClip(effect.casterBounds, () => {
-          drawTridentGlyph(effect.casterHand, 44, color, flower, handAlpha, 1.35);
           discGlow(effect.casterHand.x, effect.casterHand.y, 5.5, COLORS.teal, handAlpha * 0.42);
         });
     
@@ -1056,7 +1164,6 @@
         const alpha = fadeOut(p, 0.76);
         const open = easeOut(clamp(p / 0.55));
         withEffectClip(effect.casterBounds, () => {
-          drawTridentGlyph(effect.casterHand, 43, color, accent, alpha, 1.35);
           discGlow(effect.casterHand.x, effect.casterHand.y, 5.5, color, alpha * 0.44);
           drawWeaponProcRain(effect.casterBounds, effect.sourceAnchor, p, effect.seed, "water");
           const groundY = effect.sourceAnchor.groundY;
@@ -1076,7 +1183,6 @@
         const core = [255, 224, 123];
         const alpha = fadeOut(p, 0.76);
         withEffectClip(effect.casterBounds, () => {
-          drawTridentGlyph(effect.casterHand, 43, fire, core, alpha, 1.35);
           discGlow(effect.casterHand.x, effect.casterHand.y, 5.5, fire, alpha * 0.46);
         });
     
@@ -2114,6 +2220,27 @@
         const forwardX = center.x + center.direction * (7 + grow * 7);
         const charge = { x: forwardX, y: center.y };
     
+        if (["minorHeal", "heal", "quickAid", "rejuvenate"].includes(style)) {
+          const strong = style === "heal" || style === "rejuvenate";
+          const count = style === "rejuvenate" ? 6 : style === "quickAid" ? 5 : 4;
+          const size = strong ? 3.7 : 2.5;
+          discGlow(charge.x, charge.y, 4 + grow * (strong ? 7 : 5), [75, 238, 132], chargeAlpha * 0.48);
+          for (let i = 0; i < count; i++) {
+            const orbit = phase * 0.58 + i * Math.PI * 2 / count;
+            const radiusX = 8 + grow * (strong ? 13 : 9);
+            const radiusY = 6 + grow * (strong ? 10 : 7);
+            drawHealingCross(
+              charge.x + Math.cos(orbit) * radiusX,
+              charge.y + Math.sin(orbit) * radiusY,
+              size * (0.82 + (i % 3) * 0.13),
+              i % 3 ? [91, 255, 145] : [205, 255, 219],
+              chargeAlpha * 0.82,
+              strong ? 1.1 : 0.9
+            );
+          }
+          return;
+        }
+    
         if (style === "waterStrike" || style === "manaSpring") {
           discGlow(charge.x, charge.y, 4 + grow * (style === "manaSpring" ? 8 : 6), COLORS.water, chargeAlpha * 0.58);
           for (let i = 0; i < (style === "manaSpring" ? 5 : 3); i++) {
@@ -2482,6 +2609,8 @@
         ctx.save();
         if (effect.kind === "cast") {
           drawCastingEffect(effect, p);
+        } else if (effect.kind === "directHeal") {
+          drawDirectHeal(effect, p);
         } else if (effect.kind === "bloomHeal") {
           drawBloomHeal(effect, p);
         } else if (effect.kind === "rippleProc") {
@@ -2535,6 +2664,8 @@
       function getCastProfile(abilityHrid) {
         const attackProfile = PROFILES[abilityHrid];
         if (attackProfile?.magic && MAGIC_STYLES.has(attackProfile.style)) return attackProfile;
+        const healProfile = HEAL_PROFILES[abilityHrid];
+        if (healProfile) return { ...healProfile, magic: true };
         const auraSpec = AURA_SPECS[abilityHrid];
         if (!auraSpec) return null;
         const auraStyle = AURA_KIND_STYLES[auraSpec.kind] || AURA_KIND_STYLES.mysticAura;
@@ -2552,6 +2683,10 @@
         const towardX = firstMonsterRect ? firstMonsterRect.left + firstMonsterRect.width / 2 : window.innerWidth;
         const sourceAnchor = unitAnchor(player, auraSpec && !ATTACK_ABILITIES.has(abilityHrid) ? null : towardX);
         if (!sourceAnchor) return;
+        const supportCast = Boolean(auraSpec && !ATTACK_ABILITIES.has(abilityHrid));
+        const forwardTarget = firstMonsterRect
+          ? { x: towardX, y: firstMonsterRect.top + firstMonsterRect.height / 2 }
+          : { x: sourceAnchor.x + 80, y: sourceAnchor.y };
         const targets = profile.style === "frostSurge"
           ? monsters.map((monster, index) => {
             if (monsterHp[index] === 0) return null;
@@ -2577,10 +2712,8 @@
           abilityHrid,
           profile,
           sourceAnchor,
-          supportCast: Boolean(auraSpec && !ATTACK_ABILITIES.has(abilityHrid)),
-          towardPoint: auraSpec && !ATTACK_ABILITIES.has(abilityHrid)
-            ? null
-            : (firstMonsterRect ? { x: towardX, y: firstMonsterRect.top + firstMonsterRect.height / 2 } : null),
+          supportCast,
+          towardPoint: supportCast ? null : forwardTarget,
           targets,
           seed: effectSequence * 131 + playerIndex * 29,
           duration: intervalToMilliseconds(intervalValue),
@@ -2699,6 +2832,42 @@
           enemy: true,
           duration: 760,
           startedAt: syncedAttackStartedAt(profile, false)
+        });
+        requestRender();
+      }
+    
+      function spawnDirectHeal(casterIndex, abilityHrid) {
+        if (pageHidden) return;
+        const profile = HEAL_PROFILES[abilityHrid];
+        if (!profile) return;
+        const { players } = findCombatUnits();
+        if (!players[casterIndex]) return;
+        const targetIndices = profile.group
+          ? players.map((_, index) => index).filter(index => playerHp[index] > 0)
+          : [casterIndex];
+        const targets = targetIndices.map(index => {
+          const player = players[index];
+          const anchor = unitAnchor(player);
+          const bounds = unitEffectBounds(player);
+          if (!anchor || !bounds) return null;
+          return {
+            index,
+            anchor,
+            bounds,
+            point: { x: anchor.x, y: anchor.y }
+          };
+        }).filter(Boolean);
+        if (!targets.length) return;
+        activeEffects.push({
+          id: ++effectSequence,
+          kind: "directHeal",
+          casterIndex,
+          abilityHrid,
+          profile,
+          targets,
+          seed: effectSequence * 157 + casterIndex * 37 + abilityHrid.length * 19,
+          duration: profile.duration,
+          startedAt: performance.now() - Math.min(90, profile.duration * 0.08)
         });
         requestRender();
       }
@@ -3161,6 +3330,7 @@
     
         const completedPlayerCasts = [];
         const completedAuraCasts = [];
+        const completedHealCasts = [];
         const completedBloomCasts = [];
         const completedRippleCasts = [];
         const completedBlazeCasts = [];
@@ -3181,6 +3351,9 @@
             }
             if (AURA_SPECS[completedAbility]) {
               completedAuraCasts.push({ index, abilityHrid: completedAbility });
+            }
+            if (HEAL_PROFILES[completedAbility]) {
+              completedHealCasts.push({ index, abilityHrid: completedAbility });
             }
             const bloomChance = numberOr(playerBloomChance[index], 0);
             if (bloomChance > 0 && completedAbility !== "autoAttack" && !DIRECT_HEAL_ABILITIES.has(completedAbility)) {
@@ -3317,6 +3490,9 @@
           const bloomCast = completedBloomCasts[0];
           const bloomTarget = playerHeals.slice().sort((a, b) => b.healing - a.healing)[0];
           spawnBloomHeal(bloomCast.index, bloomTarget.index, bloomTarget.healing, bloomCast.bloomChance);
+        }
+        for (const cast of completedHealCasts) {
+          spawnDirectHeal(cast.index, cast.abilityHrid);
         }
         if (playerHits.length) {
           const casts = [...pendingMonsterCasts.values()].filter(cast => now - cast.createdAt <= 900);
