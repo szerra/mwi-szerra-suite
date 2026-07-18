@@ -51,7 +51,7 @@ COMBAT_MODULES = (
         "MWI 戰鬥技能特效.user.js",
         "https://github.com/szerra/mwi-combat-vfx",
         "Local build for gzerr",
-        "0.1.13",
+        "0.1.14",
         "MIT",
         "start",
     ),
@@ -174,7 +174,7 @@ PACKS = (
         "MWI-Szerra-Combat-Suite.user.js",
         "MWI Szerra 戰鬥資訊包",
         "整合戰鬥 HUD、升級時間、模擬器匯入、掉落統計與戰鬥特效；可從 Tampermonkey 選單逐項開關。",
-    "1.0.6",
+    "1.0.7",
         "CC-BY-NC-SA-4.0",
         (
             "// @match        https://www.milkywayidle.com/*",
