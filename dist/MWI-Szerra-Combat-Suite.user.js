@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Szerra 戰鬥資訊包
 // @namespace    https://github.com/szerra/mwi-szerra-suite
-// @version      1.0.6
+// @version      1.0.7
 // @description  整合戰鬥 HUD、升級時間、模擬器匯入、掉落統計與戰鬥特效；可從 Tampermonkey 選單逐項開關。
 // @author       Szerra integration; see THIRD_PARTY_NOTICES.md
 // @license      CC-BY-NC-SA-4.0
@@ -124,7 +124,7 @@
 
   // ---------------------------------------------------------------------------
   // Module: 戰鬥技能特效
-  // Original: MWI 戰鬥技能特效.user.js v0.1.13
+  // Original: MWI 戰鬥技能特效.user.js v0.1.14
   // Author: Local build for gzerr
   // License: MIT
   // Source: https://github.com/szerra/mwi-combat-vfx
@@ -134,8 +134,8 @@
     (function () {
       "use strict";
     
-      const VERSION = "0.1.13";
-      const CANVAS_ID = "mwiCombatVfxCanvas0113";
+      const VERSION = "0.1.14";
+      const CANVAS_ID = "mwiCombatVfxCanvas0114";
       const MONSTER_UNIT_CLASS = "mwiCombatVfxMonsterUnit";
       const ORIGINAL_SPLAT_STYLE_ID = "mwiCombatVfxOriginalMonsterSplatStyle";
       const WS_HOSTS = ["api.milkywayidle.com/ws", "api-test.milkywayidle.com/ws"];
@@ -144,8 +144,8 @@
       const HP_TRAIL_DURATION = 460;
       const hpTrailStates = new WeakMap();
     
-      if (window.__mwiCombatVfx0113Installed) return;
-      window.__mwiCombatVfx0113Installed = true;
+      if (window.__mwiCombatVfx0114Installed) return;
+      window.__mwiCombatVfx0114Installed = true;
     
       const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
       const lerp = (a, b, t) => a + (b - a) * t;
@@ -584,6 +584,22 @@
         };
       }
     
+      function unitDropBounds(unit) {
+        if (!unit) return null;
+        const model = unit.querySelector('[class*="CombatUnit_unitIconContainer"]')
+          || unit.querySelector('[class*="CombatUnit_monsterIcon"]')
+          || unit.querySelector('[class*="CombatUnit_model"]')
+          || unit;
+        const modelRect = model.getBoundingClientRect();
+        const unitRect = unit.getBoundingClientRect();
+        return {
+          left: Math.max(unitRect.left + 2, modelRect.left - 2),
+          top: unitRect.top + 2,
+          right: Math.min(unitRect.right - 2, modelRect.right + 2),
+          bottom: Math.min(unitRect.bottom - 2, modelRect.bottom + 2)
+        };
+      }
+    
       function withEffectClip(bounds, draw) {
         if (!bounds) return draw();
         const width = Math.max(1, bounds.right - bounds.left);
@@ -868,7 +884,7 @@
           ctx.strokeText(label, target.point.x, y);
           ctx.fillStyle = target.miss
             ? rgba([207, 221, 239], alpha)
-            : effect.isCrit ? rgba([255, 220, 86], alpha) : rgba([255, 255, 255], alpha);
+            : rgba(effect.profile.color, alpha);
           ctx.fillText(label, target.point.x, y);
           ctx.restore();
         }
@@ -1436,7 +1452,7 @@
             if (mode === "firestorm") drawFirestorm(target, p, alpha, effect.seed);
             if (p > 0.52) impactRing(target.point, p, effect.profile.color, effect.seed + target.index * 9, mode === "firestorm" ? 46 : 35);
           };
-          if (mode === "frostSurge") withEffectClip(target.bounds, drawTargetEffect);
+          if (mode === "frostSurge") withEffectClip(target.dropBounds || target.bounds, drawTargetEffect);
           else drawTargetEffect();
         }
       }
@@ -1446,13 +1462,15 @@
         const center = targetBodyPoint(target);
         const width = Number.isFinite(anchor.width) ? anchor.width : 100;
         const height = Number.isFinite(anchor.height) ? anchor.height : 100;
-        const blockWidth = clamp(width * 0.58, 44, 70);
-        const blockHeight = clamp(height * 0.52, 50, 78);
+        const blockWidth = clamp(width * 0.72, 52, 78);
+        const blockHeight = clamp(height * 0.68, 58, 88);
         const fall = easeInOut(clamp(progress / 0.62));
         const crash = clamp((progress - 0.62) / 0.38);
         const intactAlpha = alpha * (1 - smoothstep(0.04, 0.58, crash));
-        const bounds = target.bounds;
-        const startY = bounds ? bounds.top - blockHeight * 0.42 : center.y - height * 0.9;
+        const bounds = target.dropBounds || target.bounds;
+        const startY = bounds
+          ? (target.precast ? bounds.top + blockHeight / 2 + 2 : bounds.top - blockHeight * 0.42)
+          : center.y - height * 0.9;
         const impactY = center.y - clamp(height * 0.14, 8, 16);
         const blockY = lerp(startY, impactY, Math.pow(fall, 1.7));
         const blockX = center.x + Math.sin(progress * Math.PI * 3 + target.index) * 2.2 * (1 - fall);
@@ -1474,7 +1492,7 @@
           ctx.shadowColor = rgba(COLORS.ice, intactAlpha);
           ctx.shadowBlur = 13;
           ctx.lineJoin = "round";
-          ctx.lineWidth = 1.6;
+          ctx.lineWidth = 2.2;
     
           const left = -blockWidth / 2;
           const right = blockWidth / 2;
@@ -1482,7 +1500,7 @@
           const bottom = blockHeight / 2;
           const bevel = clamp(blockWidth * 0.14, 6, 10);
     
-          ctx.fillStyle = rgba([62, 177, 236], intactAlpha * 0.42);
+          ctx.fillStyle = rgba([62, 177, 236], intactAlpha * 0.58);
           ctx.strokeStyle = rgba([231, 252, 255], intactAlpha * 0.94);
           ctx.beginPath();
           ctx.moveTo(left + bevel, top);
@@ -1780,7 +1798,7 @@
         const alpha = appear * disappear * (0.76 + Math.sin(p * Math.PI * 10) * 0.12);
         const radius = 31 + Math.sin(p * Math.PI * 4) * 3;
         if (!effect.supportCast && effect.towardPoint) {
-          verticalMagicCircle(
+          const castCenter = verticalMagicCircle(
             effect.sourceAnchor,
             effect.towardPoint,
             effect.profile.color,
@@ -1789,6 +1807,16 @@
             radius,
             p
           );
+          drawSpellCharge(effect, p, alpha, castCenter);
+          if (effect.profile.style === "frostSurge" && effect.targets?.length) {
+            const dropAlpha = smoothstep(0, 0.08, p) * (1 - smoothstep(0.97, 1, p));
+            const dropProgress = clamp(p / 0.97) * 0.60;
+            for (const target of effect.targets) {
+              withEffectClip(target.dropBounds || target.bounds, () => {
+                drawIceEruption(target, dropProgress, dropAlpha, effect.seed);
+              });
+            }
+          }
           return;
         }
     
@@ -1812,6 +1840,136 @@
         );
         ctx.stroke();
         ctx.restore();
+      }
+    
+      function drawChargeShard(point, angle, size, color, alpha) {
+        if (!point || alpha <= 0) return;
+        ctx.save();
+        ctx.translate(point.x, point.y);
+        ctx.rotate(angle);
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = rgba(color, alpha * 0.48);
+        ctx.strokeStyle = rgba([235, 253, 255], alpha * 0.94);
+        ctx.shadowColor = rgba(color, alpha);
+        ctx.shadowBlur = 8;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(size, 0);
+        ctx.lineTo(-size * 0.65, size * 0.36);
+        ctx.lineTo(-size * 0.28, 0);
+        ctx.lineTo(-size * 0.65, -size * 0.36);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+    
+      function drawSpellCharge(effect, p, alpha, center) {
+        if (!center || alpha <= 0) return;
+        const style = effect.profile.style;
+        const phase = p * Math.PI * 4 + effect.seed;
+        const grow = easeOut(clamp(p / 0.34));
+        const pulse = 0.82 + Math.sin(phase * 1.7) * 0.12;
+        const chargeAlpha = alpha * pulse;
+        const forwardX = center.x + center.direction * (7 + grow * 7);
+        const charge = { x: forwardX, y: center.y };
+    
+        if (style === "waterStrike" || style === "manaSpring") {
+          discGlow(charge.x, charge.y, 4 + grow * (style === "manaSpring" ? 8 : 6), COLORS.water, chargeAlpha * 0.58);
+          for (let i = 0; i < (style === "manaSpring" ? 5 : 3); i++) {
+            const orbit = phase + i * Math.PI * 2 / (style === "manaSpring" ? 5 : 3);
+            const radius = 9 + grow * 7 + (i % 2) * 3;
+            drawStatusDrop(
+              charge.x + Math.cos(orbit) * radius,
+              charge.y + Math.sin(orbit) * radius,
+              2.2 + (i % 2),
+              i % 2 ? COLORS.cyan : COLORS.water,
+              chargeAlpha * 0.78
+            );
+          }
+          return;
+        }
+    
+        if (style === "iceSpear" || style === "frostSurge") {
+          const count = style === "frostSurge" ? 5 : 3;
+          for (let i = 0; i < count; i++) {
+            const offset = (i - (count - 1) / 2) * 7;
+            const shardPoint = {
+              x: charge.x - center.direction * (i % 2) * 3,
+              y: charge.y + offset
+            };
+            drawChargeShard(shardPoint, center.direction < 0 ? Math.PI : 0, 7 + grow * 5 - Math.abs(offset) * 0.12, COLORS.ice, chargeAlpha * 0.86);
+          }
+          if (style === "frostSurge") {
+            for (let i = 0; i < 4; i++) {
+              const orbit = phase * 0.7 + i * Math.PI / 2;
+              drawStatusSnowflake(charge.x + Math.cos(orbit) * 20, charge.y + Math.sin(orbit) * 20, 2.7, chargeAlpha * 0.72, orbit);
+            }
+          }
+          return;
+        }
+    
+        if (style === "entangle") {
+          for (let strand = 0; strand < 2; strand++) {
+            const points = [];
+            for (let i = 0; i <= 16; i++) {
+              const t = i / 16;
+              points.push({
+                x: center.x + center.direction * t * (13 + grow * 13),
+                y: center.y + Math.sin(t * Math.PI * 3 + phase + strand * Math.PI) * (5 + grow * 4)
+              });
+            }
+            pathGlow(points, strand ? [186, 240, 60] : COLORS.green, chargeAlpha * 0.72, 0.9, 5);
+          }
+          return;
+        }
+    
+        if (style === "toxicPollen" || style === "naturesVeil") {
+          const color = style === "toxicPollen" ? COLORS.poison : COLORS.teal;
+          const accent = style === "toxicPollen" ? [218, 245, 75] : [146, 255, 218];
+          for (let i = 0; i < 10; i++) {
+            const orbit = phase * (0.42 + i * 0.018) + rand(effect.seed, i) * Math.PI * 2;
+            const radius = 5 + grow * (9 + rand(effect.seed + 7, i) * 14);
+            const drift = Math.sin(phase + i) * 4;
+            discGlow(charge.x + Math.cos(orbit) * radius, charge.y + Math.sin(orbit) * radius + drift, 1.5 + rand(effect.seed + 13, i) * 3.5, i % 3 ? color : accent, chargeAlpha * 0.55);
+          }
+          return;
+        }
+    
+        if (style === "lifeDrain") {
+          discGlow(charge.x, charge.y, 5 + grow * 9, [208, 45, 123], chargeAlpha * 0.68);
+          for (let strand = 0; strand < 2; strand++) {
+            const points = [];
+            for (let i = 0; i <= 18; i++) {
+              const t = i / 18;
+              const orbit = phase + strand * Math.PI + t * Math.PI * 2.4;
+              points.push({ x: charge.x + Math.cos(orbit) * (4 + t * 15), y: charge.y + Math.sin(orbit) * (4 + t * 10) });
+            }
+            pathGlow(points, strand ? COLORS.purple : [255, 58, 116], chargeAlpha * 0.62, 1, 6);
+          }
+          return;
+        }
+    
+        if (style === "fireball" || style === "flameBlast" || style === "firestorm") {
+          const fireSize = style === "firestorm" ? 12 : style === "flameBlast" ? 10 : 8;
+          drawStatusFlame(charge.x, charge.y + 2, fireSize * (0.58 + grow * 0.42), chargeAlpha * 0.92, phase);
+          const emberCount = style === "firestorm" ? 8 : style === "flameBlast" ? 6 : 4;
+          for (let i = 0; i < emberCount; i++) {
+            const orbit = phase * (style === "firestorm" ? 0.9 : 0.55) + i * Math.PI * 2 / emberCount;
+            const radius = 10 + grow * (style === "firestorm" ? 18 : 11);
+            discGlow(charge.x + Math.cos(orbit) * radius, charge.y + Math.sin(orbit) * radius * 0.72, 1.4 + (i % 3), i % 2 ? COLORS.fire : COLORS.gold, chargeAlpha * 0.68);
+          }
+          if (style === "firestorm") ellipseGlow(charge.x, charge.y, 15 + grow * 16, 7 + grow * 8, COLORS.fire, chargeAlpha * 0.64, 1.4, phase);
+          return;
+        }
+    
+        if (style === "smokeBurst") {
+          for (let i = 0; i < 9; i++) {
+            const orbit = phase * 0.28 + rand(effect.seed, i) * Math.PI * 2;
+            const radius = 4 + grow * (8 + rand(effect.seed + 5, i) * 17);
+            discGlow(charge.x + Math.cos(orbit) * radius, charge.y + Math.sin(orbit) * radius * 0.72 - grow * (i % 3) * 3, 3 + rand(effect.seed + 9, i) * 5, i % 3 ? [132, 78, 205] : [72, 52, 112], chargeAlpha * 0.38);
+          }
+        }
       }
     
       function drawStatusDrop(x, y, size, color, alpha) {
@@ -2154,6 +2312,23 @@
         const towardX = firstMonsterRect ? firstMonsterRect.left + firstMonsterRect.width / 2 : window.innerWidth;
         const sourceAnchor = unitAnchor(player, auraSpec && !ATTACK_ABILITIES.has(abilityHrid) ? null : towardX);
         if (!sourceAnchor) return;
+        const targets = profile.style === "frostSurge"
+          ? monsters.map((monster, index) => {
+            if (monsterHp[index] === 0) return null;
+            const anchor = unitAnchor(monster);
+            const bounds = unitEffectBounds(monster);
+            const dropBounds = unitDropBounds(monster);
+            if (!anchor || !bounds || !dropBounds) return null;
+            return {
+              index,
+              precast: true,
+              anchor,
+              bounds,
+              dropBounds,
+              point: { x: anchor.x, y: anchor.y }
+            };
+          }).filter(Boolean)
+          : [];
         stopCastEffect(playerIndex);
         activeEffects.push({
           id: ++effectSequence,
@@ -2166,6 +2341,7 @@
           towardPoint: auraSpec && !ATTACK_ABILITIES.has(abilityHrid)
             ? null
             : (firstMonsterRect ? { x: towardX, y: firstMonsterRect.top + firstMonsterRect.height / 2 } : null),
+          targets,
           seed: effectSequence * 131 + playerIndex * 29,
           duration: intervalToMilliseconds(intervalValue),
           startedAt: performance.now()
@@ -2229,6 +2405,7 @@
             miss: Boolean(hit.miss),
             anchor,
             bounds: unitEffectBounds(hit.element),
+            dropBounds: unitDropBounds(hit.element),
             point: {
               x: anchor.x + (hit.miss ? missDirection * 36 : 0),
               y: anchor.y - (hit.miss ? 26 : 0)
