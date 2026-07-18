@@ -11,10 +11,12 @@ The Combat Suite and Character Suite are distributed under [Creative Commons Att
 
 ## MIT components
 
+- `MWI-Hit-Tracker-Canvas` 1.2.4 — Artintel and BKN46 — <https://greasyfork.org/scripts/535422>
+
 - `[银河奶牛]显示战斗升级所需时间` 1.4 — DOUBAO-DiamondMoo — <https://greasyfork.org/scripts/556360>
 - `[银河奶牛]康康运气_修复` 0.1.34 — Weierstras@www.milkywayidle.com — <https://greasyfork.org/scripts/546427>
 - `MWI Battle HUD` 0.3.17 — mortymorty — <https://greasyfork.org/scripts/582499>
-- `MWI 戰鬥技能特效` 0.1.9 — Local build for gzerr — <https://github.com/szerra/mwi-combat-vfx>
+- `MWI 戰鬥技能特效` 0.1.10 — Local build for gzerr — <https://github.com/szerra/mwi-combat-vfx>
 - `MWI 市场伴侣` 2.3.0 — ColaCola — <https://greasyfork.org/scripts/567386>
 - `MWI Profit Panel` 2026.04.29 — MengLan — <https://greasyfork.org/scripts/536724>
 - `[银河奶牛]装备数据同步` 1.2.7 — Sunrishe — <https://greasyfork.org/scripts/574037>
