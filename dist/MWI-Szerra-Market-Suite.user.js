@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Szerra 市場工具包
 // @namespace    https://github.com/szerra/mwi-szerra-suite
-// @version      1.0.0
+// @version      1.0.1
 // @description  整合材料購物清單、市場高亮與收益面板；價格歷史由獨立的 mooket II 提供。
 // @author       Szerra integration; see THIRD_PARTY_NOTICES.md
 // @license      MIT
@@ -120,7 +120,7 @@
 
   // ---------------------------------------------------------------------------
   // Module: 市場伴侶
-  // Original: MWI 市场伴侣.user.js v2.3.0
+  // Original: MWI 市场伴侣.user.js v2.3.0-szerra.1
   // Author: ColaCola
   // License: MIT
   // Source: https://greasyfork.org/scripts/567386
@@ -899,7 +899,12 @@
                 (rowLooksSane(100, 4) === true && rowLooksSane(57419680725 * 10000, 4) === false
                  && rowLooksSane(100, 57419680725) === false && rowLooksSane(-5, 4) === false)
                 || "钳制判定异常");
-            check("防注入·斜杠右侧=总量+有损吸附(MWI_Toolkit)", () => {
+            check("需求量·原生每次消耗+Toolkit 总量兼容", () => {
+                // 游戏原生库存/每次消耗：0 / 8.9、行动 50 次，总需求必须为 445。
+                const recipe = resolveNeed("0 / 8.9", 50);
+                if (recipe.totalNeeded !== 445 || recipe.needPerAction !== 8.9 || recipe.stockOverride !== 0) {
+                    return "原生配方解析失败:" + JSON.stringify(recipe);
+                }
                 // Toolkit 把 inputCount 改写成 "␣/ 302K␣"(截断、库存抹掉);
                 // 右侧按总量处理(防平方爆炸);K 截断经整数吸附重建精确总量。
                 const r = resolveNeed("\u00A0/ 302K\u00A0", 151096);   // 截图实测场景
@@ -2582,21 +2587,19 @@
         }
     
         /** 综合解析所需量（优先尝试 stock/need 格式，回退到普通解析）
-         *  关键修复:斜杠右侧的数字一律是「总需求量」,绝不能再乘 actionCount。
-         *  MWI_Toolkit 会把游戏的 inputCount 文本 "1,434 / 4" 直接改写成 "␣/ 239K␣"
-         *  (左侧库存被抹掉),旧逻辑落入 parseRequiredPerAction×actionCount 分支,
-         *  把总量又乘了一次次数 → 平方爆炸(截图 5.7e10 = 239K×239,432)。
-         *  右侧总量为有损格式时做整数吸附重建(见 _snapLossyNeed)。 */
+         *  游戏原生的「库存 / 所需」格式中，右侧是每次行动的消耗量；
+         *  例如 0 / 8.9、行动 50 次，应得到总需求 445，而不是 9。
+         *  但 MWI_Toolkit 可能把 "1,434 / 4" 改写成 "␣/ 239K␣"：
+         *  左侧库存被抹掉、右侧已经是整批总量。此无左值格式仍按总量处理，
+         *  并在 K/M/B 有损显示时做整数吸附重建（见 _snapLossyNeed）。 */
         function resolveNeed(inputText, actionCountValue) {
             const raw = String(inputText ?? "");
             const slashIdx = raw.search(/[\/／]/);
             const rightRaw = slashIdx >= 0 ? raw.slice(slashIdx + 1) : "";
             const pair = parseStockNeedPair(inputText);
             if (pair) {
-                let totalNeeded = pair.total;
-                let needPerAction = actionCountValue > 0 ? totalNeeded / actionCountValue : totalNeeded;
-                const snapped = _snapLossyNeed(needPerAction, actionCountValue, rightRaw);
-                if (snapped != null) { needPerAction = snapped; totalNeeded = snapped * actionCountValue; }
+                const needPerAction = pair.total;
+                const totalNeeded = needPerAction * actionCountValue;
                 return { needPerAction, totalNeeded, stockOverride: pair.stock, inferred: true };
             }
             if (slashIdx >= 0 && !/[=＝]/.test(raw.slice(0, slashIdx))) {
@@ -6218,6 +6221,7 @@
         const _marketPrefill = {
             _observer: null,
             _prefillDone: new WeakSet(),
+            _scanTimer: null,
     
             /** 初始化预填模块 */
             init() {
@@ -6230,17 +6234,33 @@
                 if (this._observer) this._observer.disconnect();
                 this._observer = new MutationObserver((mutations) => {
                     if (!STATE.autoPrefillEnabled) return;
+                    let hasAddedElement = false;
                     for (const m of mutations) {
                         for (const node of m.addedNodes) {
                             if (!(node instanceof Element)) continue;
-                            const modal = node.matches?.(MARKET_SEL.modalContent) ? node : node.querySelector?.(MARKET_SEL.modalContent);
-                            if (modal && !this._prefillDone.has(modal)) {
-                                setTimeout(() => this._tryPrefill(modal), 200);
-                            }
+                            hasAddedElement = true;
+                            break;
                         }
+                        if (hasAddedElement) break;
                     }
+                    // React 可能分多次挂载 modal、图标与 input。只检查 addedNode 的
+                    // 子树会在 modal 外壳先出现时漏掉，因此等本轮渲染稳定后扫描页面。
+                    if (hasAddedElement) this._scheduleScan();
                 });
                 this._observer.observe(document.body, { childList: true, subtree: true });
+                this._scheduleScan();
+            },
+    
+            /** 合并高频 mutation，在 React 完成本轮渲染后扫描现存购买弹窗 */
+            _scheduleScan(delay = 80) {
+                if (this._scanTimer) clearTimeout(this._scanTimer);
+                this._scanTimer = setTimeout(() => {
+                    this._scanTimer = null;
+                    if (!STATE.autoPrefillEnabled) return;
+                    document.querySelectorAll(MARKET_SEL.modalContent).forEach((modal) => {
+                        if (!this._prefillDone.has(modal)) this._tryPrefill(modal);
+                    });
+                }, delay);
             },
     
             /** 尝试对购买弹窗执行预填（仅购买类型 + 购物车中有此物品时） */
@@ -6263,12 +6283,23 @@
     
                 const neededQty = Math.ceil(cartRow.quantity);
                 const qtyInput = modal.querySelector(MARKET_SEL.quantityInput);
-                if (!qtyInput) return;
+                if (!qtyInput) {
+                    this._scheduleScan(120);
+                    return;
+                }
     
-                this._setReactInputValue(qtyInput, String(neededQty));
+                const targetValue = String(neededQty);
+                this._setReactInputValue(qtyInput, targetValue);
                 this._prefillDone.add(modal);
                 this._showPrefillHint(modal, cartRow.name || bareId, neededQty);
                 console.log(`[mwi-mm] 已预填数量: ${cartRow.name} × ${neededQty}`);
+    
+                // React 受控输入偶尔会在同一轮渲染末尾把 DOM 值恢复成 1。
+                // 短暂复核一次；不做持续锁定，避免妨碍玩家之后手动修改数量。
+                setTimeout(() => {
+                    if (!modal.isConnected || String(qtyInput.value) === targetValue) return;
+                    this._setReactInputValue(qtyInput, targetValue);
+                }, 120);
             },
     
             /** 通过原生 setter 设置 React 携带的 input 值（触发 input/change 事件） */

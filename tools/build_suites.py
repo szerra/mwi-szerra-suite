@@ -106,7 +106,7 @@ MARKET_MODULES = (
         "MWI 市场伴侣.user.js",
         "https://greasyfork.org/scripts/567386",
         "ColaCola",
-        "2.3.0",
+        "2.3.0-szerra.1",
         "MIT",
         "start",
     ),
@@ -202,7 +202,7 @@ PACKS = (
         "MWI-Szerra-Market-Suite.user.js",
         "MWI Szerra 市場工具包",
         "整合材料購物清單、市場高亮與收益面板；價格歷史由獨立的 mooket II 提供。",
-        "1.0.0",
+        "1.0.1",
         "MIT",
         (
             "// @match        https://www.milkywayidle.com/*",
