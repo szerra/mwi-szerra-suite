@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Szerra 戰鬥資訊包
 // @namespace    https://github.com/szerra/mwi-szerra-suite
-// @version      1.0.11
+// @version      1.0.12
 // @description  整合戰鬥 HUD、升級時間、模擬器匯入、掉落統計與戰鬥特效；可從 Tampermonkey 選單逐項開關。
 // @author       Szerra integration; see THIRD_PARTY_NOTICES.md
 // @license      CC-BY-NC-SA-4.0
@@ -124,7 +124,7 @@
 
   // ---------------------------------------------------------------------------
   // Module: 戰鬥技能特效
-  // Original: MWI 戰鬥技能特效.user.js v0.1.18
+  // Original: MWI 戰鬥技能特效.user.js v0.1.19
   // Author: Local build for gzerr
   // License: MIT
   // Source: https://github.com/szerra/mwi-combat-vfx
@@ -134,7 +134,7 @@
     (function () {
       "use strict";
     
-      const VERSION = "0.1.18";
+      const VERSION = "0.1.19";
       const CANVAS_ID = "mwiCombatVfxCanvas0118";
       const MONSTER_UNIT_CLASS = "mwiCombatVfxMonsterUnit";
       const ORIGINAL_SPLAT_STYLE_ID = "mwiCombatVfxOriginalMonsterSplatStyle";
@@ -3474,6 +3474,25 @@
         if (completedPlayerCasts.length) {
           for (const cast of completedPlayerCasts) {
             const profile = PROFILES[cast.abilityHrid] || PROFILES.autoAttack;
+            if (cast.abilityHrid === "/abilities/mana_spring") {
+              // Mana Spring has two simultaneous layers: the one-shot attack
+              // fountain on every living monster and the party MP-regeneration
+              // bubbles managed by attachedAuras.  Do not make the attack fountain
+              // depend on HP damage sharing the caster's battle_updated frame.
+              const hitByMonster = new Map(monsterHits.map(hit => [hit.index, hit]));
+              const fountainTargets = aliveMonsterIndicesBeforeUpdate.map(index =>
+                hitByMonster.get(index) || { index, damage: 0, miss: false }
+              );
+              if (fountainTargets.length) {
+                spawnPlayerAttack(
+                  cast.index,
+                  cast.abilityHrid,
+                  fountainTargets,
+                  fountainTargets.some(hit => hit.crit)
+                );
+              }
+              continue;
+            }
             if (profile.area || profile.chain) {
               if (monsterHits.length) {
                 spawnPlayerAttack(cast.index, cast.abilityHrid, monsterHits, monsterHits.some(hit => hit.crit));
