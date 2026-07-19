@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Szerra 市場工具包
 // @namespace    https://github.com/szerra/mwi-szerra-suite
-// @version      1.0.1
+// @version      1.0.2
 // @description  整合材料購物清單、市場高亮與收益面板；價格歷史由獨立的 mooket II 提供。
 // @author       Szerra integration; see THIRD_PARTY_NOTICES.md
 // @license      MIT
@@ -120,7 +120,7 @@
 
   // ---------------------------------------------------------------------------
   // Module: 市場伴侶
-  // Original: MWI 市场伴侣.user.js v2.3.0-szerra.1
+  // Original: MWI 市场伴侣.user.js v2.3.0-szerra.2
   // Author: ColaCola
   // License: MIT
   // Source: https://greasyfork.org/scripts/567386
@@ -900,9 +900,10 @@
                  && rowLooksSane(100, 57419680725) === false && rowLooksSane(-5, 4) === false)
                 || "钳制判定异常");
             check("需求量·原生每次消耗+Toolkit 总量兼容", () => {
-                // 游戏原生库存/每次消耗：0 / 8.9、行动 50 次，总需求必须为 445。
+                // 游戏原生库存/每次消耗：0 / 8.9 先四舍五入为每次 9，
+                // 行动 50 次时总需求必须为 450。
                 const recipe = resolveNeed("0 / 8.9", 50);
-                if (recipe.totalNeeded !== 445 || recipe.needPerAction !== 8.9 || recipe.stockOverride !== 0) {
+                if (recipe.totalNeeded !== 450 || recipe.needPerAction !== 9 || recipe.stockOverride !== 0) {
                     return "原生配方解析失败:" + JSON.stringify(recipe);
                 }
                 // Toolkit 把 inputCount 改写成 "␣/ 302K␣"(截断、库存抹掉);
@@ -914,6 +915,23 @@
                 if (!(native.totalNeeded === 4 && native.stockOverride === 1434)) return "原生格式回归失败";
                 const exact = resolveNeed("\u00A0/ 302,192\u00A0", 151096);
                 return exact.totalNeeded === 302192 || "无后缀精确值被误吸附";
+            });
+            check("材料列·忽略第三方无 ID 伪装行", () => {
+                const host = document.createElement("div");
+                for (const id of ["ginkgo_lumber", "redwood_lumber", "arcane_lumber"]) {
+                    const real = document.createElement("div");
+                    real.className = "Item_itemContainer__test";
+                    real.innerHTML = `<svg><use href="/static/items.svg#${id}"></use></svg>`;
+                    host.appendChild(real);
+                    const injected = document.createElement("div");
+                    injected.className = "Item_itemContainer__test";
+                    injected.textContent = "需要:450个";
+                    host.appendChild(injected);
+                }
+                const rows = _pickRequirementItemRows(host);
+                const ids = rows.map((row) => normalizeItemId(extractIconRef(row)));
+                return (rows.length === 3 && ids.join(",") === "ginkgo_lumber,redwood_lumber,arcane_lumber")
+                    || ("筛选结果异常:" + ids.join(","));
             });
             results.push({ 项目: "主题令牌", 结果: "ℹ", 备注: "内置暗色(固定)" });
             results.push({ 项目: "状态报告", 结果: "ℹ", 备注:
@@ -2588,7 +2606,7 @@
     
         /** 综合解析所需量（优先尝试 stock/need 格式，回退到普通解析）
          *  游戏原生的「库存 / 所需」格式中，右侧是每次行动的消耗量；
-         *  例如 0 / 8.9、行动 50 次，应得到总需求 445，而不是 9。
+         *  例如 0 / 8.9 应先四舍五入为每次 9，行动 50 次得到总需求 450。
          *  但 MWI_Toolkit 可能把 "1,434 / 4" 改写成 "␣/ 239K␣"：
          *  左侧库存被抹掉、右侧已经是整批总量。此无左值格式仍按总量处理，
          *  并在 K/M/B 有损显示时做整数吸附重建（见 _snapLossyNeed）。 */
@@ -2598,7 +2616,7 @@
             const rightRaw = slashIdx >= 0 ? raw.slice(slashIdx + 1) : "";
             const pair = parseStockNeedPair(inputText);
             if (pair) {
-                const needPerAction = pair.total;
+                const needPerAction = Math.round(pair.total);
                 const totalNeeded = needPerAction * actionCountValue;
                 return { needPerAction, totalNeeded, stockOverride: pair.stock, inferred: true };
             }
@@ -3788,6 +3806,27 @@
             return "";
         }
     
+        /**
+         * 只保留真正的材料物品列。
+         * 某些第三方插件会把「需要:445个」提示套用 Item_itemContainer 游戏类名，
+         * 并作为 requirements 的直接子元素插入。仅凭类名会让材料列与库存/消耗列
+         * 索引错位，造成无 ID、漏掉后续材料及数量套到错误物品。
+         */
+        function _pickRequirementItemRows(requirementsEl) {
+            if (!requirementsEl) return [];
+            const raw = [...requirementsEl.querySelectorAll(`:scope > ${SEL.requirementItems}`)];
+            const gameRows = raw.filter(hasGameClass);
+            const candidates = gameRows.length ? gameRows : raw;
+            const identified = candidates.filter((row) => {
+                const itemCore = row.querySelector(SEL.itemCore) || row;
+                const href = extractIconRef(itemCore) || extractUseHref(itemCore);
+                return isLikelyItemRef(href);
+            });
+            // 正常游戏材料列都带物品 SVG/HRID。只有完全无法识别时才 fail-open，
+            // 保留旧 DOM 回退能力，避免游戏未来改版时整张清单消失。
+            return identified.length ? identified : candidates;
+        }
+    
         /** 通过 SVG 图标匹配产出物品，反向查找对应的制作配方 */
         function _resolveActionBySvg(modal) {
             if (!_dataLayer._outputToAction) return null;
@@ -3839,7 +3878,7 @@
             const requirementsEl = modal.querySelector(SEL.requirements);
             // 仅保留带游戏 CSS-Modules 类名的节点 — 防第三方仿冒类名的注入节点
             //       顶失败下方的行数交叉校验(校验失败会整体退到易污染的 DOM 解析路径)
-            const requirementItems = requirementsEl ? [...requirementsEl.querySelectorAll(`:scope > ${SEL.requirementItems}`)].filter(hasGameClass) : [];
+            const requirementItems = _pickRequirementItemRows(requirementsEl);
             const inventoryEls = requirementsEl ? [...requirementsEl.querySelectorAll(`:scope > ${SEL.requirementInventory}`)].filter(hasGameClass) : [];
             const inputEls = requirementsEl ? [...requirementsEl.querySelectorAll(`:scope > ${SEL.requirementInput}`)].filter(hasGameClass) : [];
     
@@ -4003,7 +4042,7 @@
                 return { actionCount: { value: 1, raw: "1", infinite: false }, requirements: [], upgrade: null, totalMissingTypes: 0, totalMissingQty: 0, missingList: [], isCurrentAction: false, needManualCount: false, isHousePanel: true };
             }
             const actionCount = { value: 1, raw: "1", infinite: false };
-            const requirementItems = [...requirementsEl.querySelectorAll(`:scope > ${SEL.requirementItems}`)].filter(hasGameClass);   // 防注入,见 §06 防御块
+            const requirementItems = _pickRequirementItemRows(requirementsEl);
             const inventoryEls = [...requirementsEl.querySelectorAll(`:scope > ${SEL.houseInventory}`)].filter(hasGameClass);
             const inputEls = [...requirementsEl.querySelectorAll(`:scope > ${SEL.houseInput}`)].filter(hasGameClass);
     
@@ -4126,7 +4165,7 @@
                 const filtered = raw.filter(hasGameClass);
                 return (filtered.length === 0 && raw.length > 0) ? raw : filtered;
             };
-            const requirementItems = pick(SEL.requirementItems);
+            const requirementItems = _pickRequirementItemRows(requirementsEl);
             const inventoryEls = pick(SEL.requirementInventory);
             const inputEls = pick(SEL.requirementInput);
             const countVal = actionCount.infinite ? 1 : Math.max(1, actionCount.value || 1);
