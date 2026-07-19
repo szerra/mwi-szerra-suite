@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Szerra 戰鬥資訊包
 // @namespace    https://github.com/szerra/mwi-szerra-suite
-// @version      1.0.10
+// @version      1.0.11
 // @description  整合戰鬥 HUD、升級時間、模擬器匯入、掉落統計與戰鬥特效；可從 Tampermonkey 選單逐項開關。
 // @author       Szerra integration; see THIRD_PARTY_NOTICES.md
 // @license      CC-BY-NC-SA-4.0
@@ -124,7 +124,7 @@
 
   // ---------------------------------------------------------------------------
   // Module: 戰鬥技能特效
-  // Original: MWI 戰鬥技能特效.user.js v0.1.17
+  // Original: MWI 戰鬥技能特效.user.js v0.1.18
   // Author: Local build for gzerr
   // License: MIT
   // Source: https://github.com/szerra/mwi-combat-vfx
@@ -134,8 +134,8 @@
     (function () {
       "use strict";
     
-      const VERSION = "0.1.17";
-      const CANVAS_ID = "mwiCombatVfxCanvas0117";
+      const VERSION = "0.1.18";
+      const CANVAS_ID = "mwiCombatVfxCanvas0118";
       const MONSTER_UNIT_CLASS = "mwiCombatVfxMonsterUnit";
       const ORIGINAL_SPLAT_STYLE_ID = "mwiCombatVfxOriginalMonsterSplatStyle";
       const WS_HOSTS = ["api.milkywayidle.com/ws", "api-test.milkywayidle.com/ws"];
@@ -144,8 +144,8 @@
       const HP_TRAIL_DURATION = 460;
       const hpTrailStates = new WeakMap();
     
-      if (window.__mwiCombatVfx0117Installed) return;
-      window.__mwiCombatVfx0117Installed = true;
+      if (window.__mwiCombatVfx0118Installed) return;
+      window.__mwiCombatVfx0118Installed = true;
     
       const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
       const lerp = (a, b, t) => a + (b - a) * t;
@@ -1615,14 +1615,18 @@
             const body = targetBodyPoint(target);
             // This is an impact lock around the monster body, not a floor casting circle.
             // The attack casting circle already appears in front of the caster's hand.
-            ellipseGlow(body.x, body.y, 17 + ready * 12, 22 + ready * 15, effect.profile.color, ready * 0.42, 1.25, -p * 2.4 - target.index);
+            if (mode !== "manaSpring") {
+              ellipseGlow(body.x, body.y, 17 + ready * 12, 22 + ready * 15, effect.profile.color, ready * 0.42, 1.25, -p * 2.4 - target.index);
+            }
             if (mode === "frostSurge") drawIceEruption(target, erupt, alpha, effect.seed);
             if (mode === "manaSpring") drawManaFountain(effect, target, erupt, alpha);
             if (mode === "toxicPollen") drawToxicDust(target, erupt, alpha, effect.seed);
             if (mode === "naturesVeil") drawSporeVeil(target, erupt, alpha, effect.seed);
             if (mode === "flameBlast") drawLavaEruption(target, erupt, alpha, effect.seed);
             if (mode === "firestorm") drawFirestorm(target, p, alpha, effect.seed);
-            if (p > 0.52) impactRing(target.point, p, effect.profile.color, effect.seed + target.index * 9, mode === "firestorm" ? 46 : 35);
+            if (mode !== "manaSpring" && p > 0.52) {
+              impactRing(target.point, p, effect.profile.color, effect.seed + target.index * 9, mode === "firestorm" ? 46 : 35);
+            }
           };
           if (mode === "frostSurge" || mode === "manaSpring") withEffectClip(target.dropBounds || target.bounds, drawTargetEffect);
           else drawTargetEffect();
@@ -1862,84 +1866,86 @@
       }
     
       function drawManaFountain(effect, target, progress, alpha) {
-        const base = targetGroundPoint(target);
-        const rise = easeOut(clamp(progress / 0.42));
-        const bloom = easeOut(clamp((progress - 0.18) / 0.48));
-        const settle = smoothstep(0.56, 1, progress);
-        const fountainHeight = 47;
-        const apex = { x: base.x, y: base.y - fountainHeight * rise };
+        const anchor = target.anchor || {};
+        const bounds = target.dropBounds || target.bounds;
+        const body = targetBodyPoint(target, clamp((anchor.height || 90) * 0.08, 5, 9));
+        const height = clamp((anchor.height || 90) * 0.68, 48, 72);
+        const width = clamp((anchor.width || 90) * 0.34, 25, 38);
+        const core = { x: body.x, y: body.y + clamp((anchor.height || 90) * 0.11, 7, 12) };
+        const topY = Math.max(bounds ? bounds.top + 11 : body.y - height * 0.52, body.y - height * 0.54);
+        const appear = smoothstep(0, 0.12, progress);
+        const fade = 1 - smoothstep(0.78, 1, progress);
+        const localAlpha = alpha * appear * fade;
+        const open = easeOut(clamp(progress / 0.58));
     
-        // Rotating mana basin: a liquid-looking pool with an inner rune ring.
-        ellipseGlow(base.x, base.y + 2, 12 + bloom * 23, 4 + bloom * 5, [80, 185, 255], alpha * 0.68, 1.45, progress * 2.4);
-        ellipseGlow(base.x, base.y + 1, 7 + bloom * 14, 2.5 + bloom * 3.6, [150, 105, 255], alpha * 0.54, 1.0, -progress * 3.1);
-        discGlow(base.x, base.y - 1, 4 + bloom * 7, [118, 226, 255], alpha * 0.54);
+        // A compact chest-level mana core replaces the former basin and outer ring.
+        discGlow(core.x, core.y, 4 + open * 5.5, [80, 190, 255], localAlpha * 0.74);
+        discGlow(core.x, core.y, 1.8 + open * 2.2, [221, 253, 255], localAlpha * 0.96);
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.translate(core.x, core.y);
+        ctx.rotate(progress * 2.6 + effect.seed * 0.01);
+        ctx.strokeStyle = rgba([150, 221, 255], localAlpha * 0.68);
+        ctx.shadowColor = rgba([84, 170, 255], localAlpha);
+        ctx.shadowBlur = 6;
+        ctx.lineWidth = 0.9;
+        ctx.strokeRect(-6, -6, 12, 12);
+        ctx.restore();
     
-        // Several narrow jets twist together before opening at the top.
-        for (let i = 0; i < 5; i++) {
-          const offset = (i - 2) * 3.2;
-          const sway = Math.sin(progress * Math.PI * 5 + i * 1.4) * 2.2;
-          const start = { x: base.x + offset, y: base.y };
-          const control = { x: base.x - offset * 0.8 + sway, y: lerp(base.y, apex.y, 0.56) };
-          const end = { x: apex.x + offset * 0.32, y: apex.y + Math.abs(offset) * 0.18 };
+        // Three thin streams rise from the core and curl outward like a small mana fountain.
+        const streams = [
+          { side: -1, spread: width * 0.72, lift: 0 },
+          { side: 0, spread: 0, lift: -5 },
+          { side: 1, spread: width * 0.72, lift: 0 }
+        ];
+        streams.forEach((stream, index) => {
+          const streamOpen = clamp((progress - index * 0.025) / 0.60);
+          if (streamOpen <= 0) return;
+          const end = {
+            x: core.x + stream.side * stream.spread,
+            y: topY + stream.lift + Math.abs(stream.side) * 6
+          };
+          const control = {
+            x: core.x - stream.side * width * 0.22,
+            y: lerp(core.y, end.y, 0.44) - (stream.side === 0 ? 8 : 2)
+          };
           const points = [];
-          for (let step = 0; step <= 16; step++) points.push(qBezier(start, control, end, step / 16));
-          pathGlow(points, i % 2 ? [113, 205, 255] : [194, 248, 255], alpha * (0.62 + rise * 0.24), 1.15 + (i === 2 ? 0.55 : 0), 7);
-        }
-    
-        // At the crest the mana fans out, then falls back as curved luminous water.
-        if (bloom > 0.01) {
-          for (let i = 0; i < 8; i++) {
-            const side = i < 4 ? -1 : 1;
-            const lane = i % 4;
-            const spread = 13 + lane * 6.2;
-            const start = { x: apex.x + side * (lane * 0.8), y: apex.y + lane * 0.7 };
-            const control = {
-              x: apex.x + side * spread * 0.64,
-              y: apex.y - (10 + lane * 1.8) * bloom
-            };
-            const end = {
-              x: base.x + side * spread * bloom,
-              y: base.y - 2 - (1 - bloom) * 23 + settle * 3
-            };
-            const points = [];
-            const visible = clamp(bloom * 1.18);
-            for (let step = 0; step <= 18; step++) points.push(qBezier(start, control, end, visible * step / 18));
-            pathGlow(points, lane % 2 ? [91, 166, 255] : [138, 234, 255], alpha * (0.58 - lane * 0.055), 1.05, 6);
+          for (let step = 0; step <= 20; step++) {
+            points.push(qBezier(core, control, end, streamOpen * step / 20));
           }
+          pathGlow(points, index === 1 ? [202, 249, 255] : (index === 0 ? [86, 185, 255] : [157, 112, 255]), localAlpha * (index === 1 ? 0.78 : 0.66), index === 1 ? 1.15 : 0.92, 6);
     
-          for (let i = 0; i < 9; i++) {
-            const angle = i * 2.399 + progress * 3.2;
-            const radius = 8 + (i % 4) * 6;
-            const particle = {
-              x: apex.x + Math.cos(angle) * radius * bloom,
-              y: apex.y + Math.sin(angle) * radius * 0.42 * bloom + settle * 8
-            };
-            discGlow(particle.x, particle.y, 1.2 + (i % 3) * 0.55, i % 3 ? [123, 221, 255] : [177, 119, 255], alpha * 0.56);
+          const fall = clamp((progress - 0.28 - index * 0.03) / 0.48);
+          if (fall > 0) {
+            const dropX = end.x + stream.side * (2 + fall * 3);
+            const dropY = end.y + easeInOut(fall) * clamp(height * 0.48, 22, 34);
+            drawStatusDrop(dropX, dropY, stream.side === 0 ? 1.8 : 2.4, index === 2 ? [167, 117, 255] : [104, 210, 255], localAlpha * (1 - smoothstep(0.72, 1, fall)));
           }
-        }
+        });
     
-        // A small diamond rune makes it read as mana rather than ordinary water.
-        if (rise > 0.35) {
-          const runeY = apex.y - 7;
-          const runeSize = 4 + bloom * 2.5;
-          ctx.save();
-          ctx.globalCompositeOperation = "lighter";
-          ctx.translate(apex.x, runeY);
-          ctx.rotate(Math.PI / 4 + progress * 1.8);
-          ctx.strokeStyle = rgba([211, 251, 255], alpha * 0.84);
-          ctx.shadowColor = rgba([112, 174, 255], alpha);
-          ctx.shadowBlur = 7;
-          ctx.lineWidth = 1.05;
-          ctx.strokeRect(-runeSize, -runeSize, runeSize * 2, runeSize * 2);
-          ctx.restore();
-        }
-    
-        const returnT = easeInOut(clamp((progress - 0.46) / 0.54));
-        if (returnT > 0) {
-          const control = { x: (base.x + effect.start.x) / 2, y: Math.min(base.y, effect.start.y) - 34 };
+        // Two narrow ribbons climb around the body; they are not enclosing circles.
+        const spiralHead = easeOut(clamp((progress - 0.06) / 0.68));
+        const spiralTail = Math.max(0, spiralHead - 0.62);
+        for (let strand = 0; strand < 2; strand++) {
           const points = [];
-          for (let i = 0; i <= 18; i++) points.push(qBezier(base, control, effect.start, returnT * i / 18));
-          pathGlow(points, [106, 181, 255], alpha * 0.34, 1.0, 6);
+          for (let step = 0; step <= 24; step++) {
+            const t = lerp(spiralTail, spiralHead, step / 24);
+            const angle = t * Math.PI * 3.6 + strand * Math.PI + effect.seed * 0.013;
+            points.push({
+              x: body.x + Math.sin(angle) * width * 0.48,
+              y: core.y + 17 - t * height * 0.72
+            });
+          }
+          pathGlow(points, strand ? [159, 104, 255] : [73, 190, 255], localAlpha * 0.46, 0.76, 4);
+        }
+    
+        for (let i = 0; i < 8; i++) {
+          const particleProgress = clamp((progress - rand(effect.seed + target.index * 19, i) * 0.24) / 0.72);
+          if (particleProgress <= 0) continue;
+          const side = i % 2 ? 1 : -1;
+          const x = body.x + side * (9 + (i % 4) * 5) + Math.sin(progress * 7 + i) * 2;
+          const y = topY + 9 + easeOut(particleProgress) * clamp(height * 0.48, 23, 34);
+          discGlow(x, y, 1.0 + (i % 3) * 0.42, i % 3 ? [107, 211, 255] : [170, 119, 255], localAlpha * (1 - smoothstep(0.62, 1, particleProgress)) * 0.66);
         }
       }
     
@@ -2353,6 +2359,28 @@
         ctx.restore();
       }
     
+      function drawManaBubble(x, y, radius, color, alpha) {
+        if (alpha <= 0.01) return;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = rgba(color, alpha * 0.10);
+        ctx.strokeStyle = rgba(color, alpha * 0.76);
+        ctx.shadowColor = rgba(color, alpha);
+        ctx.shadowBlur = 6;
+        ctx.lineWidth = 0.85;
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.strokeStyle = rgba([226, 250, 255], alpha * 0.82);
+        ctx.lineWidth = 0.7;
+        ctx.beginPath();
+        ctx.arc(-radius * 0.24, -radius * 0.22, radius * 0.42, Math.PI * 1.05, Math.PI * 1.62);
+        ctx.stroke();
+        ctx.restore();
+      }
+    
       function drawStatusFlame(x, y, size, alpha, phase) {
         ctx.save();
         ctx.translate(x, y);
@@ -2554,9 +2582,19 @@
             discGlow(anchor.x + Math.cos(angle) * radius * 0.57, groundY + Math.sin(angle) * 5 - 4, 2.4, COLORS.gold, alpha * 0.9);
           }
         } else if (aura.kind === "manaSpring") {
-          for (let i = 0; i < 4; i++) {
-            const rise = (phase * 0.42 + i / 4) % 1;
-            drawStatusDrop(anchor.x + (i - 1.5) * 8, groundY - 4 - rise * 18, 2.2, COLORS.water, alpha * (1 - rise));
+          // Mana Spring's party buff is shown as compact bubbles around every
+          // affected character, independent of the one-shot fountain impact.
+          for (let i = 0; i < 8; i++) {
+            const rise = (phase * (0.14 + (i % 3) * 0.018) + i / 8 + rand(aura.seed + 31, i) * 0.22) % 1;
+            const bubbleAlpha = alpha
+              * smoothstep(0, 0.12, rise)
+              * (1 - smoothstep(0.76, 1, rise));
+            const side = i % 2 ? 1 : -1;
+            const lateral = radius * (0.34 + rand(aura.seed + 47, i) * 0.34);
+            const x = anchor.x + side * lateral + Math.sin(phase * 1.4 + i * 1.7) * 2.2;
+            const y = groundY - 6 - rise * clamp(anchor.height * 0.66, 38, 63);
+            const bubbleRadius = 1.9 + rand(aura.seed + 67, i) * 2.3;
+            drawManaBubble(x, y, bubbleRadius, i % 3 ? [92, 196, 255] : [170, 119, 255], bubbleAlpha * 0.84);
           }
         } else if (aura.kind === "fierceAura") {
           for (const sign of [-1, 1]) {
