@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Szerra 戰鬥資訊包
 // @namespace    https://github.com/szerra/mwi-szerra-suite
-// @version      1.0.12
+// @version      1.0.13
 // @description  整合戰鬥 HUD、升級時間、模擬器匯入、掉落統計與戰鬥特效；可從 Tampermonkey 選單逐項開關。
 // @author       Szerra integration; see THIRD_PARTY_NOTICES.md
 // @license      CC-BY-NC-SA-4.0
@@ -124,7 +124,7 @@
 
   // ---------------------------------------------------------------------------
   // Module: 戰鬥技能特效
-  // Original: MWI 戰鬥技能特效.user.js v0.1.19
+  // Original: MWI 戰鬥技能特效.user.js v0.1.20
   // Author: Local build for gzerr
   // License: MIT
   // Source: https://github.com/szerra/mwi-combat-vfx
@@ -134,7 +134,7 @@
     (function () {
       "use strict";
     
-      const VERSION = "0.1.19";
+      const VERSION = "0.1.20";
       const CANVAS_ID = "mwiCombatVfxCanvas0118";
       const MONSTER_UNIT_CLASS = "mwiCombatVfxMonsterUnit";
       const ORIGINAL_SPLAT_STYLE_ID = "mwiCombatVfxOriginalMonsterSplatStyle";
@@ -1619,7 +1619,7 @@
               ellipseGlow(body.x, body.y, 17 + ready * 12, 22 + ready * 15, effect.profile.color, ready * 0.42, 1.25, -p * 2.4 - target.index);
             }
             if (mode === "frostSurge") drawIceEruption(target, erupt, alpha, effect.seed);
-            if (mode === "manaSpring") drawManaFountain(effect, target, erupt, alpha);
+            if (mode === "manaSpring") drawManaFountain(effect, target, p, alpha);
             if (mode === "toxicPollen") drawToxicDust(target, erupt, alpha, effect.seed);
             if (mode === "naturesVeil") drawSporeVeil(target, erupt, alpha, effect.seed);
             if (mode === "flameBlast") drawLavaEruption(target, erupt, alpha, effect.seed);
@@ -1864,88 +1864,187 @@
           ctx.restore();
         }
       }
-    
+      function drawManaSpringPool(target, progress, alpha, seed, eruption = 0) {
+        if (alpha <= 0) return;
+        const anchor = target.anchor || {};
+        const ground = targetGroundPoint(target);
+        const build = easeOut(clamp(progress));
+        const burst = clamp(eruption);
+        const poolRx = clamp((anchor.width || 90) * 0.45, 38, 56);
+        const poolRy = clamp((anchor.height || 90) * 0.085, 6, 10);
+        const pulse = 0.92 + Math.sin(progress * Math.PI * 6 + seed * 0.01) * 0.08;
+        const poolAlpha = alpha * (0.38 + build * 0.62);
+        // Soft filled water instead of a magic-circle outline: it should read as a
+        // shallow puddle gathering beneath the monster while Mana Spring is cast.
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.translate(ground.x, ground.y);
+        ctx.scale(1, poolRy / poolRx);
+        const poolGradient = ctx.createRadialGradient(0, 0, 0, 0, 0, poolRx * pulse);
+        poolGradient.addColorStop(0, rgba([205, 249, 255], poolAlpha * 0.72));
+        poolGradient.addColorStop(0.36, rgba([75, 174, 255], poolAlpha * 0.52));
+        poolGradient.addColorStop(0.72, rgba([92, 105, 255], poolAlpha * 0.27));
+        poolGradient.addColorStop(1, rgba([40, 126, 238], 0));
+        ctx.fillStyle = poolGradient;
+        ctx.beginPath();
+        ctx.arc(0, 0, poolRx * pulse, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        // Thin broken ripples make the surface feel liquid without restoring the
+        // large blue enclosing circle that was intentionally removed.
+        for (let ring = 0; ring < 2; ring++) {
+          const wave = (progress * 1.8 + ring * 0.48) % 1;
+          const ringAlpha = poolAlpha * (1 - wave) * (ring ? 0.30 : 0.42);
+          const ringRx = poolRx * (0.25 + wave * 0.68);
+          const ringRy = poolRy * (0.38 + wave * 0.62);
+          ctx.save();
+          ctx.globalCompositeOperation = "lighter";
+          ctx.strokeStyle = rgba(ring ? [153, 116, 255] : [180, 239, 255], ringAlpha);
+          ctx.shadowColor = rgba([72, 175, 255], ringAlpha);
+          ctx.shadowBlur = 5;
+          ctx.lineWidth = 0.8;
+          ctx.setLineDash([ringRx * 0.42, ringRx * 0.18]);
+          ctx.beginPath();
+          ctx.ellipse(ground.x, ground.y, ringRx, ringRy, 0, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
+        // The middle of the puddle swells during the cast, then narrows as the
+        // finished spell converts that stored mound into the rising jet.
+        const moundBuild = smoothstep(0.18, 0.92, build);
+        const moundHeight = clamp((anchor.height || 90) * 0.17, 13, 21) * moundBuild * (1 - burst * 0.62);
+        const moundWidth = clamp(poolRx * 0.27, 10, 15) * (0.72 + moundBuild * 0.28);
+        if (moundHeight > 0.4) {
+          ctx.save();
+          ctx.globalCompositeOperation = "lighter";
+          const moundGradient = ctx.createLinearGradient(ground.x, ground.y - moundHeight, ground.x, ground.y + 2);
+          moundGradient.addColorStop(0, rgba([232, 253, 255], poolAlpha * 0.92));
+          moundGradient.addColorStop(0.42, rgba([92, 196, 255], poolAlpha * 0.62));
+          moundGradient.addColorStop(1, rgba([101, 86, 255], poolAlpha * 0.10));
+          ctx.fillStyle = moundGradient;
+          ctx.shadowColor = rgba([77, 179, 255], poolAlpha);
+          ctx.shadowBlur = 8;
+          ctx.beginPath();
+          ctx.moveTo(ground.x - moundWidth, ground.y);
+          ctx.bezierCurveTo(
+            ground.x - moundWidth * 0.76,
+            ground.y - moundHeight * 0.54,
+            ground.x - moundWidth * 0.24,
+            ground.y - moundHeight,
+            ground.x,
+            ground.y - moundHeight
+          );
+          ctx.bezierCurveTo(
+            ground.x + moundWidth * 0.24,
+            ground.y - moundHeight,
+            ground.x + moundWidth * 0.76,
+            ground.y - moundHeight * 0.54,
+            ground.x + moundWidth,
+            ground.y
+          );
+          ctx.closePath();
+          ctx.fill();
+          ctx.restore();
+          discGlow(ground.x, ground.y - moundHeight, 2.4 + moundBuild * 1.8, [216, 251, 255], poolAlpha * 0.72);
+        }
+      }
       function drawManaFountain(effect, target, progress, alpha) {
         const anchor = target.anchor || {};
         const bounds = target.dropBounds || target.bounds;
-        const body = targetBodyPoint(target, clamp((anchor.height || 90) * 0.08, 5, 9));
-        const height = clamp((anchor.height || 90) * 0.68, 48, 72);
-        const width = clamp((anchor.width || 90) * 0.34, 25, 38);
-        const core = { x: body.x, y: body.y + clamp((anchor.height || 90) * 0.11, 7, 12) };
-        const topY = Math.max(bounds ? bounds.top + 11 : body.y - height * 0.52, body.y - height * 0.54);
-        const appear = smoothstep(0, 0.12, progress);
-        const fade = 1 - smoothstep(0.78, 1, progress);
-        const localAlpha = alpha * appear * fade;
-        const open = easeOut(clamp(progress / 0.58));
-    
-        // A compact chest-level mana core replaces the former basin and outer ring.
-        discGlow(core.x, core.y, 4 + open * 5.5, [80, 190, 255], localAlpha * 0.74);
-        discGlow(core.x, core.y, 1.8 + open * 2.2, [221, 253, 255], localAlpha * 0.96);
+        const ground = targetGroundPoint(target);
+        const height = clamp((anchor.height || 90) * 0.96, 78, 112);
+        const width = clamp((anchor.width || 90) * 0.48, 41, 60);
+        const burst = easeOut(clamp(progress / 0.34));
+        const localAlpha = alpha * smoothstep(0, 0.035, progress);
+        const topY = Math.max(bounds ? bounds.top + 9 : ground.y - height, ground.y - height);
+        const actualHeight = ground.y - topY;
+        drawManaSpringPool(target, 1, localAlpha, effect.seed + target.index * 37, burst);
+        if (burst <= 0) return;
+        // A bright central column grows directly from the prepared mound.
+        const jetTopY = lerp(ground.y - 7, topY, burst);
+        const jetHalfWidth = lerp(6.5, 3.2, burst);
         ctx.save();
         ctx.globalCompositeOperation = "lighter";
-        ctx.translate(core.x, core.y);
-        ctx.rotate(progress * 2.6 + effect.seed * 0.01);
-        ctx.strokeStyle = rgba([150, 221, 255], localAlpha * 0.68);
-        ctx.shadowColor = rgba([84, 170, 255], localAlpha);
-        ctx.shadowBlur = 6;
-        ctx.lineWidth = 0.9;
-        ctx.strokeRect(-6, -6, 12, 12);
+        const jetGradient = ctx.createLinearGradient(ground.x, jetTopY, ground.x, ground.y);
+        jetGradient.addColorStop(0, rgba([235, 254, 255], localAlpha * 0.96));
+        jetGradient.addColorStop(0.38, rgba([94, 207, 255], localAlpha * 0.82));
+        jetGradient.addColorStop(1, rgba([102, 91, 255], localAlpha * 0.26));
+        ctx.fillStyle = jetGradient;
+        ctx.shadowColor = rgba([65, 171, 255], localAlpha);
+        ctx.shadowBlur = 11;
+        ctx.beginPath();
+        ctx.moveTo(ground.x - jetHalfWidth, ground.y);
+        ctx.bezierCurveTo(
+          ground.x - jetHalfWidth * 0.62,
+          lerp(ground.y, jetTopY, 0.48),
+          ground.x - 1.8,
+          jetTopY + actualHeight * 0.10,
+          ground.x,
+          jetTopY
+        );
+        ctx.bezierCurveTo(
+          ground.x + 1.8,
+          jetTopY + actualHeight * 0.10,
+          ground.x + jetHalfWidth * 0.62,
+          lerp(ground.y, jetTopY, 0.48),
+          ground.x + jetHalfWidth,
+          ground.y
+        );
+        ctx.closePath();
+        ctx.fill();
         ctx.restore();
-    
-        // Three thin streams rise from the core and curl outward like a small mana fountain.
-        const streams = [
-          { side: -1, spread: width * 0.72, lift: 0 },
-          { side: 0, spread: 0, lift: -5 },
-          { side: 1, spread: width * 0.72, lift: 0 }
+        discGlow(ground.x, jetTopY, 4.2 + burst * 2.8, [222, 252, 255], localAlpha * 0.88);
+        // Five arcing sprays open from the top of the column and fall back into the
+        // puddle.  Their spread is deliberately wider and taller than v0.1.19.
+        const sprays = [
+          { side: -1, spread: 1.00, delay: 0.00, color: [90, 190, 255] },
+          { side: -1, spread: 0.58, delay: 0.04, color: [151, 120, 255] },
+          { side: 0, spread: 0.00, delay: 0.01, color: [224, 252, 255] },
+          { side: 1, spread: 0.58, delay: 0.06, color: [151, 120, 255] },
+          { side: 1, spread: 1.00, delay: 0.02, color: [90, 190, 255] }
         ];
-        streams.forEach((stream, index) => {
-          const streamOpen = clamp((progress - index * 0.025) / 0.60);
-          if (streamOpen <= 0) return;
+        sprays.forEach((spray, index) => {
+          const open = easeOut(clamp((progress - spray.delay) / 0.48));
+          if (open <= 0) return;
+          const start = { x: ground.x, y: jetTopY + 2 };
           const end = {
-            x: core.x + stream.side * stream.spread,
-            y: topY + stream.lift + Math.abs(stream.side) * 6
+            x: ground.x + spray.side * width * spray.spread,
+            y: ground.y - clamp((anchor.height || 90) * (0.04 + Math.abs(spray.side) * 0.04), 3, 8)
           };
           const control = {
-            x: core.x - stream.side * width * 0.22,
-            y: lerp(core.y, end.y, 0.44) - (stream.side === 0 ? 8 : 2)
+            x: ground.x + spray.side * width * spray.spread * 0.24,
+            y: topY - (index % 2 ? 2 : 7)
           };
           const points = [];
-          for (let step = 0; step <= 20; step++) {
-            points.push(qBezier(core, control, end, streamOpen * step / 20));
+          for (let step = 0; step <= 24; step++) {
+            points.push(qBezier(start, control, end, open * step / 24));
           }
-          pathGlow(points, index === 1 ? [202, 249, 255] : (index === 0 ? [86, 185, 255] : [157, 112, 255]), localAlpha * (index === 1 ? 0.78 : 0.66), index === 1 ? 1.15 : 0.92, 6);
+          pathGlow(points, spray.color, localAlpha * (spray.side === 0 ? 0.88 : 0.72), spray.side === 0 ? 1.8 : 1.25, 7);
     
-          const fall = clamp((progress - 0.28 - index * 0.03) / 0.48);
-          if (fall > 0) {
-            const dropX = end.x + stream.side * (2 + fall * 3);
-            const dropY = end.y + easeInOut(fall) * clamp(height * 0.48, 22, 34);
-            drawStatusDrop(dropX, dropY, stream.side === 0 ? 1.8 : 2.4, index === 2 ? [167, 117, 255] : [104, 210, 255], localAlpha * (1 - smoothstep(0.72, 1, fall)));
+          if (open > 0.58 && spray.side !== 0) {
+            const fall = clamp((open - 0.58) / 0.42);
+            drawStatusDrop(
+              end.x + spray.side * (2 + fall * 2),
+              end.y + fall * 4,
+              2.2 + (index % 2) * 0.7,
+              spray.color,
+              localAlpha * (1 - smoothstep(0.78, 1, fall))
+            );
           }
         });
     
-        // Two narrow ribbons climb around the body; they are not enclosing circles.
-        const spiralHead = easeOut(clamp((progress - 0.06) / 0.68));
-        const spiralTail = Math.max(0, spiralHead - 0.62);
-        for (let strand = 0; strand < 2; strand++) {
-          const points = [];
-          for (let step = 0; step <= 24; step++) {
-            const t = lerp(spiralTail, spiralHead, step / 24);
-            const angle = t * Math.PI * 3.6 + strand * Math.PI + effect.seed * 0.013;
-            points.push({
-              x: body.x + Math.sin(angle) * width * 0.48,
-              y: core.y + 17 - t * height * 0.72
-            });
-          }
-          pathGlow(points, strand ? [159, 104, 255] : [73, 190, 255], localAlpha * 0.46, 0.76, 4);
-        }
-    
-        for (let i = 0; i < 8; i++) {
-          const particleProgress = clamp((progress - rand(effect.seed + target.index * 19, i) * 0.24) / 0.72);
-          if (particleProgress <= 0) continue;
-          const side = i % 2 ? 1 : -1;
-          const x = body.x + side * (9 + (i % 4) * 5) + Math.sin(progress * 7 + i) * 2;
-          const y = topY + 9 + easeOut(particleProgress) * clamp(height * 0.48, 23, 34);
-          discGlow(x, y, 1.0 + (i % 3) * 0.42, i % 3 ? [107, 211, 255] : [170, 119, 255], localAlpha * (1 - smoothstep(0.62, 1, particleProgress)) * 0.66);
+        for (let i = 0; i < 12; i++) {
+          const life = (progress * 1.7 + rand(effect.seed + target.index * 31, i)) % 1;
+          const side = rand(effect.seed + 71, i) * 2 - 1;
+          const x = ground.x + side * width * (0.22 + life * 0.72);
+          const y = jetTopY + life * actualHeight * 0.68 + Math.sin(life * Math.PI) * -12;
+          drawStatusDrop(
+            x,
+            y,
+            1.4 + rand(effect.seed + 97, i) * 1.8,
+            i % 3 ? [106, 211, 255] : [170, 121, 255],
+            localAlpha * (1 - life) * 0.72
+          );
         }
       }
     
@@ -2166,6 +2265,14 @@
             for (const target of effect.targets) {
               withEffectClip(target.dropBounds || target.bounds, () => {
                 drawIceEruption(target, dropProgress, dropAlpha, effect.seed);
+              });
+            }
+          }
+          if (effect.profile.style === "manaSpring" && effect.targets?.length) {
+            const poolAlpha = smoothstep(0, 0.14, p) * (0.82 + Math.sin(p * Math.PI * 5) * 0.08);
+            for (const target of effect.targets) {
+              withEffectClip(target.dropBounds || target.bounds, () => {
+                drawManaSpringPool(target, p, poolAlpha, effect.seed + target.index * 37);
               });
             }
           }
@@ -2725,7 +2832,7 @@
         const forwardTarget = firstMonsterRect
           ? { x: towardX, y: firstMonsterRect.top + firstMonsterRect.height / 2 }
           : { x: sourceAnchor.x + 80, y: sourceAnchor.y };
-        const targets = profile.style === "frostSurge"
+        const targets = (profile.style === "frostSurge" || profile.style === "manaSpring")
           ? monsters.map((monster, index) => {
             if (monsterHp[index] === 0) return null;
             const anchor = unitAnchor(monster);
