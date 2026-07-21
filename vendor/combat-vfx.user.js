@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI 戰鬥技能特效
 // @namespace    codex.local.mwi.combat-vfx
-// @version      0.1.20
+// @version      0.1.21
 // @description  攻擊讀條時在手前方顯示法陣，彈道同步命中，並把怪物狀態與全隊光環依實際持續時間附著在角色上。
 // @author       Local build for gzerr
 // @license      MIT
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.1.20";
+  const VERSION = "0.1.21";
   const CANVAS_ID = "mwiCombatVfxCanvas0118";
   const MONSTER_UNIT_CLASS = "mwiCombatVfxMonsterUnit";
   const ORIGINAL_SPLAT_STYLE_ID = "mwiCombatVfxOriginalMonsterSplatStyle";
@@ -52,6 +52,21 @@
       y: u * u * a.y + 2 * u * t * b.y + t * t * c.y
     };
   };
+  const VFX_ASSET_BASE = "https://raw.githubusercontent.com/szerra/mwi-szerra-suite/main/assets/vfx";
+  const loadVfxAsset = filename => {
+    const image = new Image();
+    image.decoding = "async";
+    image.crossOrigin = "anonymous";
+    image.addEventListener("load", requestRender, { once: true });
+    image.addEventListener("error", () => console.warn(`[MWI Combat VFX ${VERSION}] Failed to load ${filename}`), { once: true });
+    image.src = `${VFX_ASSET_BASE}/${filename}?v=${VERSION}`;
+    return image;
+  };
+  const VFX_ASSETS = {
+    manaFountain: loadVfxAsset("mana-fountain-v1.webp"),
+    frostBurst: loadVfxAsset("frost-burst-v1.webp")
+  };
+  const isVfxAssetReady = image => Boolean(image && image.complete && image.naturalWidth > 0 && image.naturalHeight > 0);
 
   const COLORS = {
     white: [225, 244, 255],
@@ -525,6 +540,33 @@
       x: target.point.x,
       y: Number.isFinite(anchor.groundY) ? Math.min(anchor.groundY, fallback) : fallback
     };
+  }
+  function drawVfxSprite(image, x, y, maxWidth, maxHeight, alpha, options = {}) {
+    if (!ctx || !isVfxAssetReady(image) || alpha <= 0) return false;
+    const fit = Math.min(maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
+    const scale = Math.max(0.01, Number.isFinite(options.scale) ? options.scale : 1);
+    const width = image.naturalWidth * fit * scale;
+    const height = image.naturalHeight * fit * scale;
+    const anchorX = Number.isFinite(options.anchorX) ? options.anchorX : 0.5;
+    const anchorY = Number.isFinite(options.anchorY) ? options.anchorY : 1;
+    const reveal = clamp(Number.isFinite(options.reveal) ? options.reveal : 1);
+    const left = -width * anchorX;
+    const top = -height * anchorY;
+    ctx.save();
+    ctx.translate(x, y);
+    if (Number.isFinite(options.rotation) && options.rotation) ctx.rotate(options.rotation);
+    ctx.globalAlpha = clamp(alpha);
+    ctx.globalCompositeOperation = options.composite || "screen";
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    if (reveal < 0.999) {
+      ctx.beginPath();
+      ctx.rect(left - 3, top + height * (1 - reveal) - 3, width + 6, height * reveal + 6);
+      ctx.clip();
+    }
+    ctx.drawImage(image, left, top, width, height);
+    ctx.restore();
+    return true;
   }
 
   function pathGlow(points, color, alpha, width = 3, blur = 12) {
@@ -1502,7 +1544,7 @@
         if (mode !== "manaSpring") {
           ellipseGlow(body.x, body.y, 17 + ready * 12, 22 + ready * 15, effect.profile.color, ready * 0.42, 1.25, -p * 2.4 - target.index);
         }
-        if (mode === "frostSurge") drawIceEruption(target, erupt, alpha, effect.seed);
+        if (mode === "frostSurge") drawIceEruption(target, p, alpha, effect.seed);
         if (mode === "manaSpring") drawManaFountain(effect, target, p, alpha);
         if (mode === "toxicPollen") drawToxicDust(target, erupt, alpha, effect.seed);
         if (mode === "naturesVeil") drawSporeVeil(target, erupt, alpha, effect.seed);
@@ -1522,17 +1564,18 @@
     const center = targetBodyPoint(target);
     const width = Number.isFinite(anchor.width) ? anchor.width : 100;
     const height = Number.isFinite(anchor.height) ? anchor.height : 100;
-    const crystalWidth = clamp(width * 0.78, 58, 82);
-    const crystalHeight = clamp(height * 0.90, 76, 102);
-    const fall = easeInOut(clamp(progress / 0.62));
-    const crash = clamp((progress - 0.62) / 0.38);
+    const crystalWidth = clamp(width * 0.96, 74, 104);
+    const crystalHeight = clamp(height * 1.14, 98, 132);
+    const precast = Boolean(target.precast);
+    const fall = precast ? easeInOut(clamp(progress / 0.62)) : 1;
+    const crash = precast ? 0 : clamp((progress - 0.24) / 0.44);
     const intactAlpha = alpha * (1 - smoothstep(0.04, 0.58, crash));
     const bounds = target.dropBounds || target.bounds;
     const startY = bounds
-      ? (target.precast ? bounds.top + crystalHeight * 0.72 : bounds.top - crystalHeight * 0.25)
+      ? (precast ? bounds.top + crystalHeight * 0.64 : center.y)
       : center.y - height * 0.9;
     const impactY = center.y - clamp(height * 0.14, 8, 16);
-    const blockY = lerp(startY, impactY, Math.pow(fall, 1.7));
+    const blockY = precast ? lerp(startY, impactY, Math.pow(fall, 1.7)) : impactY;
     const blockX = center.x + Math.sin(progress * Math.PI * 3 + target.index) * 2.2 * (1 - fall);
 
     if (intactAlpha > 0.02) {
@@ -1612,6 +1655,20 @@
         ctx.restore();
       }
 
+      const detailedCrystalDrawn = drawVfxSprite(
+        VFX_ASSETS.frostBurst,
+        blockX,
+        blockY + crystalHeight * 0.08,
+        crystalWidth * 1.10,
+        crystalHeight * 1.16,
+        intactAlpha * 0.94,
+        {
+          anchorY: 0.52,
+          scale: 0.88 + fall * 0.12,
+          rotation: (rand(seed + target.index, 2) - 0.5) * 0.045 * (1 - fall)
+        }
+      );
+      if (!detailedCrystalDrawn) {
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
       ctx.translate(blockX, blockY);
@@ -1712,6 +1769,7 @@
         ctx.stroke();
       }
       ctx.restore();
+      }
     }
 
     if (crash <= 0) return;
@@ -1847,6 +1905,20 @@
     // A bright central column grows directly from the prepared mound.
     const jetTopY = lerp(ground.y - 7, topY, burst);
     const jetHalfWidth = lerp(6.5, 3.2, burst);
+    const detailedFountainDrawn = drawVfxSprite(
+      VFX_ASSETS.manaFountain,
+      ground.x,
+      ground.y + 2,
+      clamp((anchor.width || 90) * 1.04, 90, 120),
+      clamp((anchor.height || 90) * 1.34, 114, 150),
+      localAlpha * 0.92,
+      {
+        anchorY: 0.975,
+        reveal: clamp(burst * 1.08),
+        scale: 0.90 + burst * 0.10
+      }
+    );
+    if (!detailedFountainDrawn) {
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     const jetGradient = ctx.createLinearGradient(ground.x, jetTopY, ground.x, ground.y);
@@ -1916,6 +1988,7 @@
         );
       }
     });
+    }
 
     for (let i = 0; i < 12; i++) {
       const life = (progress * 1.7 + rand(effect.seed + target.index * 31, i)) % 1;
