@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI 戰鬥技能特效
 // @namespace    codex.local.mwi.combat-vfx
-// @version      0.1.21
+// @version      0.1.22
 // @description  攻擊讀條時在手前方顯示法陣，彈道同步命中，並把怪物狀態與全隊光環依實際持續時間附著在角色上。
 // @author       Local build for gzerr
 // @license      MIT
@@ -18,10 +18,12 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.1.21";
+  const VERSION = "0.1.22";
   const CANVAS_ID = "mwiCombatVfxCanvas0118";
   const MONSTER_UNIT_CLASS = "mwiCombatVfxMonsterUnit";
   const ORIGINAL_SPLAT_STYLE_ID = "mwiCombatVfxOriginalMonsterSplatStyle";
+  const VFX_TOGGLE_KEY = "mwi.szerra.combatVfx.enabled";
+  const VFX_TOGGLE_EVENT = "mwi-szerra-combat-vfx-toggle";
   const WS_HOSTS = ["api.milkywayidle.com/ws", "api-test.milkywayidle.com/ws"];
   const HP_TRAIL_CLASS = "mwiCombatVfxHpTrail";
   const HP_TRAIL_DELAY = 90;
@@ -236,6 +238,7 @@
   let attachedStatuses = new Map();
   let attachedAuras = new Map();
   let pageHidden = document.hidden;
+  let effectsEnabled = localStorage.getItem(VFX_TOGGLE_KEY) !== "false";
 
   let monsterHp = [];
   let monsterMp = [];
@@ -253,7 +256,29 @@
   let playerBlazeChance = [];
   let pendingMonsterCasts = new Map();
 
+  function setEffectsEnabled(enabled) {
+    effectsEnabled = enabled !== false;
+    if (effectsEnabled) {
+      requestRender();
+      return;
+    }
+    activeEffects = [];
+    attachedStatuses.clear();
+    attachedAuras.clear();
+    if (animationFrame) cancelAnimationFrame(animationFrame);
+    animationFrame = 0;
+    if (canvas) {
+      canvas.remove();
+      canvas = null;
+      ctx = null;
+    }
+    document.getElementById(ORIGINAL_SPLAT_STYLE_ID)?.remove();
+  }
   function ensureOriginalMonsterSplatStyle() {
+    if (!effectsEnabled) {
+      document.getElementById(ORIGINAL_SPLAT_STYLE_ID)?.remove();
+      return;
+    }
     if (document.getElementById(ORIGINAL_SPLAT_STYLE_ID)) return;
     const style = document.createElement("style");
     style.id = ORIGINAL_SPLAT_STYLE_ID;
@@ -268,7 +293,7 @@
   }
 
   function ensureCanvas() {
-    if (!document.body) return false;
+    if (!document.body || !effectsEnabled) return false;
     ensureOriginalMonsterSplatStyle();
     if (canvas && canvas.isConnected) return true;
     canvas = document.getElementById(CANVAS_ID);
@@ -543,10 +568,25 @@
   }
   function drawVfxSprite(image, x, y, maxWidth, maxHeight, alpha, options = {}) {
     if (!ctx || !isVfxAssetReady(image) || alpha <= 0) return false;
-    const fit = Math.min(maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
+    const source = options.sourceRect || {};
+    const sourceX = clamp(Number.isFinite(source.x) ? source.x : 0, 0, image.naturalWidth - 1);
+    const sourceY = clamp(Number.isFinite(source.y) ? source.y : 0, 0, image.naturalHeight - 1);
+    const sourceWidth = clamp(
+      Number.isFinite(source.width) ? source.width : image.naturalWidth - sourceX,
+      1,
+      image.naturalWidth - sourceX
+    );
+    const sourceHeight = clamp(
+      Number.isFinite(source.height) ? source.height : image.naturalHeight - sourceY,
+      1,
+      image.naturalHeight - sourceY
+    );
+    const fit = Math.min(maxWidth / sourceWidth, maxHeight / sourceHeight);
     const scale = Math.max(0.01, Number.isFinite(options.scale) ? options.scale : 1);
-    const width = image.naturalWidth * fit * scale;
-    const height = image.naturalHeight * fit * scale;
+    const scaleX = Math.max(0.01, Number.isFinite(options.scaleX) ? options.scaleX : 1);
+    const scaleY = Math.max(0.01, Number.isFinite(options.scaleY) ? options.scaleY : 1);
+    const width = sourceWidth * fit * scale * scaleX;
+    const height = sourceHeight * fit * scale * scaleY;
     const anchorX = Number.isFinite(options.anchorX) ? options.anchorX : 0.5;
     const anchorY = Number.isFinite(options.anchorY) ? options.anchorY : 1;
     const reveal = clamp(Number.isFinite(options.reveal) ? options.reveal : 1);
@@ -564,7 +604,7 @@
       ctx.rect(left - 3, top + height * (1 - reveal) - 3, width + 6, height * reveal + 6);
       ctx.clip();
     }
-    ctx.drawImage(image, left, top, width, height);
+    ctx.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, left, top, width, height);
     ctx.restore();
     return true;
   }
@@ -794,6 +834,41 @@
     sparkBurst(target, p, color, seed, 12, radius);
   }
 
+  function drawCriticalImpact(effect, p) {
+    const local = clamp((p - 0.50) / 0.34);
+    const alpha = 1 - smoothstep(0.48, 1, local);
+    if (local <= 0 || alpha <= 0) return;
+    const expand = easeOut(local);
+    for (const target of effect.targets) {
+      if (target.miss || !(target.crit || (effect.targets.length === 1 && effect.isCrit))) continue;
+      const center = targetBodyPoint(target, -4);
+      ellipseGlow(center.x, center.y, 9 + expand * 34, 9 + expand * 34, COLORS.gold, alpha * 0.94, 2.1);
+      ellipseGlow(center.x, center.y, 4 + expand * 22, 4 + expand * 22, COLORS.white, alpha * 0.82, 1.2, -p * 4);
+      for (let ray = 0; ray < 8; ray++) {
+        const angle = ray * Math.PI / 4 + effect.seed * 0.017;
+        const inner = 9 + expand * 10;
+        const outer = 19 + expand * (ray % 2 ? 25 : 38);
+        pathGlow([
+          { x: center.x + Math.cos(angle) * inner, y: center.y + Math.sin(angle) * inner },
+          { x: center.x + Math.cos(angle) * outer, y: center.y + Math.sin(angle) * outer }
+        ], ray % 2 ? COLORS.gold : COLORS.white, alpha * (ray % 2 ? 0.72 : 0.92), ray % 2 ? 1.1 : 1.7, 8);
+      }
+      if (local < 0.70) {
+        ctx.save();
+        ctx.globalCompositeOperation = "source-over";
+        ctx.font = '800 12px "Arial Narrow", "Segoe UI", sans-serif';
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = rgba([83, 34, 12], alpha * 0.94);
+        ctx.fillStyle = rgba([255, 226, 92], alpha);
+        const y = center.y - 43 - expand * 9;
+        ctx.strokeText("爆擊!", center.x, y);
+        ctx.fillText("爆擊!", center.x, y);
+        ctx.restore();
+      }
+    }
+  }
   function drawDamage(effect, p) {
     if (p < 0.58) return;
     const local = clamp((p - 0.58) / 0.42);
@@ -816,7 +891,7 @@
       ctx.strokeText(label, target.point.x, y);
       ctx.fillStyle = target.miss
         ? rgba([207, 221, 239], alpha)
-        : rgba(effect.profile.color, alpha);
+        : rgba(target.crit || (effect.targets.length === 1 && effect.isCrit) ? [255, 221, 78] : effect.profile.color, alpha);
       ctx.fillText(label, target.point.x, y);
       ctx.restore();
     }
@@ -1472,8 +1547,27 @@
         const curve = projectileCurve(effect, target, p, 14);
         trailGlow(curve.points, COLORS.ice, fadeOut(p, 0.70), 1.25, 8);
         const angle = Math.atan2(target.point.y - effect.start.y, target.point.x - effect.start.x);
-        ctx.save(); ctx.translate(curve.head.x, curve.head.y); ctx.rotate(angle); ctx.fillStyle = rgba([230, 253, 255], fadeOut(p, 0.70));
-        ctx.beginPath(); ctx.moveTo(17, 0); ctx.lineTo(-9, -6); ctx.lineTo(-3, 0); ctx.lineTo(-9, 6); ctx.closePath(); ctx.fill(); ctx.restore();
+        ctx.save();
+        ctx.translate(curve.head.x, curve.head.y);
+        ctx.rotate(angle);
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = rgba([230, 253, 255], fadeOut(p, 0.70));
+        ctx.shadowColor = rgba(COLORS.ice, fadeOut(p, 0.70));
+        ctx.shadowBlur = 9;
+        for (const shard of [
+          { x: 0, y: 0, length: 19, width: 6 },
+          { x: -5, y: -7, length: 13, width: 3.8 },
+          { x: -5, y: 7, length: 13, width: 3.8 }
+        ]) {
+          ctx.beginPath();
+          ctx.moveTo(shard.x + shard.length, shard.y);
+          ctx.lineTo(shard.x - shard.length * 0.48, shard.y - shard.width);
+          ctx.lineTo(shard.x - shard.length * 0.22, shard.y);
+          ctx.lineTo(shard.x - shard.length * 0.48, shard.y + shard.width);
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.restore();
         if (p > 0.52) {
           impactRing(target.point, p, COLORS.ice, effect.seed, 41);
           drawSnowflake(target.point, p, COLORS.ice);
@@ -1481,7 +1575,18 @@
       } else if (mode === "smokeBurst") {
         const curve = projectileCurve(effect, target, p, 18);
         trailGlow(curve.points, effect.profile.color, fadeOut(p, 0.67), 1.15, 8);
-        for (let i = 0; i < 9; i++) discGlow(curve.head.x + (rand(effect.seed, i) - 0.5) * 22, curve.head.y + (rand(effect.seed + 4, i) - 0.5) * 22, 4 + rand(effect.seed + 8, i) * 8, [80, 54, 115], fadeOut(p, 0.70) * 0.52);
+        const smokeBreath = 0.78 + Math.sin(p * Math.PI * 12) * 0.18;
+        for (let i = 0; i < 11; i++) {
+          const orbit = p * 7 + i * Math.PI * 2 / 11;
+          const radius = (5 + rand(effect.seed + 4, i) * 9) * smokeBreath;
+          discGlow(
+            curve.head.x + Math.cos(orbit) * radius,
+            curve.head.y + Math.sin(orbit) * radius * 0.72,
+            4 + rand(effect.seed + 8, i) * 8,
+            i % 3 ? [80, 54, 115] : [139, 91, 198],
+            fadeOut(p, 0.70) * 0.52
+          );
+        }
         if (p > 0.50) {
           drawPoisonCloud(target.point, p, effect.seed, [105, 76, 135]);
           drawMuteGlyph(target.point, p, effect.profile.color);
@@ -1490,6 +1595,11 @@
         const curve = projectileCurve(effect, target, p, 31);
         trailGlow(curve.points, COLORS.water, fadeOut(p, 0.70), 1.25, 8);
         drawWaterWake(effect, curve.points[0], curve.head, p);
+        discGlow(curve.head.x, curve.head.y, 4.8, [215, 250, 255], fadeOut(p, 0.70) * 0.82);
+        for (let drop = 0; drop < 4; drop++) {
+          const offset = (drop - 1.5) * 4.5;
+          drawStatusDrop(curve.head.x - 8 - drop * 3, curve.head.y + offset, 1.6 + drop * 0.25, COLORS.water, fadeOut(p, 0.70) * 0.64);
+        }
         if (p > 0.52) {
           impactRing(target.point, p, COLORS.water, effect.seed, 44);
           drawWaterSplash(target.point, p, effect.seed);
@@ -1497,7 +1607,9 @@
       } else if (mode === "fireball") {
         const curve = projectileCurve(effect, target, p, 26);
         trailGlow(curve.points, COLORS.fire, fadeOut(p, 0.70), 1.55, 9);
-        discGlow(curve.head.x, curve.head.y, 9, COLORS.fire, fadeOut(p, 0.70));
+        const flamePulse = 0.88 + Math.sin(p * Math.PI * 15) * 0.12;
+        discGlow(curve.head.x, curve.head.y, 10 * flamePulse, COLORS.fire, fadeOut(p, 0.70));
+        discGlow(curve.head.x + 1, curve.head.y - 1, 4.5 * flamePulse, [255, 234, 116], fadeOut(p, 0.70) * 0.92);
         drawEmberTrail(effect, curve.points[0], curve.head, p);
         if (p > 0.52) {
           impactRing(target.point, p, COLORS.fire, effect.seed, 48);
@@ -1576,7 +1688,15 @@
       : center.y - height * 0.9;
     const impactY = center.y - clamp(height * 0.14, 8, 16);
     const blockY = precast ? lerp(startY, impactY, Math.pow(fall, 1.7)) : impactY;
-    const blockX = center.x + Math.sin(progress * Math.PI * 3 + target.index) * 2.2 * (1 - fall);
+    const impactPulse = precast
+      ? 0
+      : Math.sin(clamp(progress / 0.18) * Math.PI) * (1 - smoothstep(0.12, 0.28, progress));
+    const impactShake = precast
+      ? 0
+      : Math.sin(progress * 78 + seed * 0.13) * 2.6 * (1 - smoothstep(0.10, 0.32, progress));
+    const blockX = center.x
+      + Math.sin(progress * Math.PI * 3 + target.index) * 2.2 * (1 - fall)
+      + impactShake;
 
     if (intactAlpha > 0.02) {
       const circleY = bounds
@@ -1665,6 +1785,8 @@
         {
           anchorY: 0.52,
           scale: 0.88 + fall * 0.12,
+          scaleX: 1 + impactPulse * 0.07,
+          scaleY: 1 - impactPulse * 0.09,
           rotation: (rand(seed + target.index, 2) - 0.5) * 0.045 * (1 - fall)
         }
       );
@@ -1896,28 +2018,63 @@
     const ground = targetGroundPoint(target);
     const height = clamp((anchor.height || 90) * 0.96, 78, 112);
     const width = clamp((anchor.width || 90) * 0.48, 41, 60);
-    const burst = easeOut(clamp(progress / 0.34));
+    // Break the eruption into readable phases instead of revealing the entire
+    // illustration during the first few frames.
+    const basePhase = easeOut(clamp(progress / 0.16));
+    const jetPhase = easeInOut(clamp((progress - 0.035) / 0.50));
+    const arcPhase = easeInOut(clamp((progress - 0.22) / 0.40));
+    const dropPhase = smoothstep(0.28, 0.48, progress);
+    const burst = jetPhase;
     const localAlpha = alpha * smoothstep(0, 0.035, progress);
     const topY = Math.max(bounds ? bounds.top + 9 : ground.y - height, ground.y - height);
     const actualHeight = ground.y - topY;
-    drawManaSpringPool(target, 1, localAlpha, effect.seed + target.index * 37, burst);
-    if (burst <= 0) return;
+    drawManaSpringPool(target, basePhase, localAlpha, effect.seed + target.index * 37, burst);
+    if (basePhase <= 0) return;
     // A bright central column grows directly from the prepared mound.
     const jetTopY = lerp(ground.y - 7, topY, burst);
     const jetHalfWidth = lerp(6.5, 3.2, burst);
-    const detailedFountainDrawn = drawVfxSprite(
-      VFX_ASSETS.manaFountain,
-      ground.x,
-      ground.y + 2,
-      clamp((anchor.width || 90) * 1.04, 90, 120),
-      clamp((anchor.height || 90) * 1.34, 114, 150),
-      localAlpha * 0.92,
-      {
-        anchorY: 0.975,
-        reveal: clamp(burst * 1.08),
-        scale: 0.90 + burst * 0.10
+    const asset = VFX_ASSETS.manaFountain;
+    const assetReady = isVfxAssetReady(asset);
+    let detailedFountainDrawn = false;
+    if (assetReady && jetPhase > 0) {
+      // Raise the narrow central water column first. A source crop retains the
+      // high-detail art while holding the wide side sprays for the next phase.
+      const cropX = Math.round(asset.naturalWidth * 0.27);
+      const cropWidth = Math.round(asset.naturalWidth * 0.46);
+      const centralFade = 1 - smoothstep(0.52, 1, arcPhase) * 0.72;
+      drawVfxSprite(
+        asset,
+        ground.x,
+        ground.y + 2,
+        clamp((anchor.width || 90) * 0.58, 50, 67),
+        clamp((anchor.height || 90) * 1.34, 114, 150),
+        localAlpha * centralFade,
+        {
+          anchorY: 0.975,
+          reveal: jetPhase,
+          scaleY: 0.58 + jetPhase * 0.42,
+          sourceRect: { x: cropX, y: 0, width: cropWidth, height: asset.naturalHeight }
+        }
+      );
+      // The full fountain fades in later, so its side arcs visibly open out
+      // from the already-rising centre rather than popping in as one picture.
+      if (arcPhase > 0) {
+        drawVfxSprite(
+          asset,
+          ground.x,
+          ground.y + 2,
+          clamp((anchor.width || 90) * 1.04, 90, 120),
+          clamp((anchor.height || 90) * 1.34, 114, 150),
+          localAlpha * arcPhase * 0.92,
+          {
+            anchorY: 0.975,
+            reveal: 0.42 + arcPhase * 0.58,
+            scaleY: 0.82 + arcPhase * 0.18
+          }
+        );
       }
-    );
+      detailedFountainDrawn = true;
+    }
     if (!detailedFountainDrawn) {
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
@@ -1960,7 +2117,7 @@
       { side: 1, spread: 1.00, delay: 0.02, color: [90, 190, 255] }
     ];
     sprays.forEach((spray, index) => {
-      const open = easeOut(clamp((progress - spray.delay) / 0.48));
+      const open = easeOut(clamp((arcPhase - spray.delay) / 0.94));
       if (open <= 0) return;
       const start = { x: ground.x, y: jetTopY + 2 };
       const end = {
@@ -1991,7 +2148,8 @@
     }
 
     for (let i = 0; i < 12; i++) {
-      const life = (progress * 1.7 + rand(effect.seed + target.index * 31, i)) % 1;
+      if (dropPhase <= 0) break;
+      const life = (dropPhase * 1.35 + rand(effect.seed + target.index * 31, i)) % 1;
       const side = rand(effect.seed + 71, i) * 2 - 1;
       const x = ground.x + side * width * (0.22 + life * 0.72);
       const y = jetTopY + life * actualHeight * 0.68 + Math.sin(life * Math.PI) * -12;
@@ -2000,40 +2158,93 @@
         y,
         1.4 + rand(effect.seed + 97, i) * 1.8,
         i % 3 ? [106, 211, 255] : [170, 121, 255],
-        localAlpha * (1 - life) * 0.72
+        localAlpha * dropPhase * (1 - life) * 0.72
       );
     }
   }
 
   function drawToxicDust(target, progress, alpha, seed) {
-    for (let i = 0; i < 18; i++) {
+    const spread = easeInOut(clamp(progress / 0.72));
+    const ground = targetGroundPoint(target);
+    const body = targetBodyPoint(target, 4);
+    ellipseGlow(ground.x, ground.y, 8 + spread * 36, 3 + spread * 9, COLORS.poison, alpha * 0.34, 0.9, progress * 2);
+    for (let i = 0; i < 22; i++) {
       const angle = rand(seed + target.index, i) * Math.PI * 2;
-      const distance = progress * (10 + rand(seed + 4, i) * 48);
-      discGlow(target.point.x + Math.cos(angle) * distance, target.point.y + Math.sin(angle) * distance * 0.65, 2 + rand(seed + 9, i) * 6, COLORS.poison, alpha * 0.48);
+      const distance = spread * (10 + rand(seed + 4, i) * 48);
+      const rise = spread * (12 + rand(seed + 6, i) * 34);
+      discGlow(
+        body.x + Math.cos(angle) * distance,
+        ground.y - rise + Math.sin(angle) * distance * 0.28,
+        2 + rand(seed + 9, i) * 6,
+        i % 4 ? COLORS.poison : [220, 244, 92],
+        alpha * (0.30 + (1 - spread) * 0.26)
+      );
     }
-    drawCrackedShield(target.point, 0.60 + progress * 0.2, COLORS.poison);
+    if (progress > 0.42) drawCrackedShield(target.point, 0.56 + progress * 0.25, COLORS.poison);
   }
 
   function drawSporeVeil(target, progress, alpha, seed) {
-    for (let i = 0; i < 16; i++) {
-      const x = target.point.x + (rand(seed + target.index, i) - 0.5) * 78 * progress;
-      const y = target.point.y + (rand(seed + 5, i) - 0.5) * 82 * progress;
-      discGlow(x, y, 2 + rand(seed + 8, i) * 4, COLORS.teal, alpha * 0.62);
+    const grow = easeInOut(clamp(progress / 0.70));
+    const ground = targetGroundPoint(target);
+    for (let mushroom = 0; mushroom < 5; mushroom++) {
+      const x = ground.x + (mushroom - 2) * 13 + (rand(seed + target.index, mushroom) - 0.5) * 5;
+      const size = (4.5 + rand(seed + 17, mushroom) * 4) * grow;
+      const stemTop = ground.y - (7 + mushroom % 3 * 5) * grow;
+      pathGlow([{ x, y: ground.y }, { x, y: stemTop }], [157, 255, 222], alpha * 0.62, 0.9, 5);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.fillStyle = rgba(mushroom % 2 ? COLORS.teal : [126, 244, 213], alpha * 0.56);
+      ctx.shadowColor = rgba(COLORS.teal, alpha * 0.72);
+      ctx.shadowBlur = 7;
+      ctx.beginPath();
+      ctx.arc(x, stemTop, size, Math.PI, 0);
+      ctx.quadraticCurveTo(x, stemTop + size * 0.42, x - size, stemTop);
+      ctx.fill();
+      ctx.restore();
+    }
+    for (let i = 0; i < 18; i++) {
+      const orbit = progress * 4 + i * 2.17;
+      const distance = grow * (9 + rand(seed + 11, i) * 43);
+      const x = target.point.x + Math.cos(orbit) * distance;
+      const y = ground.y - grow * (10 + rand(seed + 5, i) * 70) + Math.sin(orbit) * 6;
+      discGlow(x, y, 1.5 + rand(seed + 8, i) * 3.8, COLORS.teal, alpha * 0.58);
     }
     const eye = { x: target.point.x, y: target.point.y - 32 };
-    ellipseGlow(eye.x, eye.y, 13, 8, COLORS.teal, alpha, 1.6);
-    pathGlow([{ x: eye.x - 11, y: eye.y - 9 }, { x: eye.x + 11, y: eye.y + 9 }], COLORS.teal, alpha, 2, 6);
+    const eyeAlpha = alpha * smoothstep(0.38, 0.72, progress);
+    ellipseGlow(eye.x, eye.y, 13, 8, COLORS.teal, eyeAlpha, 1.6);
+    pathGlow([{ x: eye.x - 11, y: eye.y - 9 }, { x: eye.x + 11, y: eye.y + 9 }], COLORS.teal, eyeAlpha, 2, 6);
   }
 
   function drawLavaEruption(target, progress, alpha, seed) {
-    const base = targetBodyPoint(target, 7);
-    discGlow(base.x, base.y, 10 + progress * 15, COLORS.fire, alpha * 0.76);
+    const base = targetGroundPoint(target);
+    const crack = easeOut(clamp(progress / 0.34));
+    const blast = easeOut(clamp((progress - 0.18) / 0.70));
+    ellipseGlow(base.x, base.y, 7 + crack * 31, 2 + crack * 8, [255, 112, 24], alpha * 0.46, 1.15);
+    for (let fissure = 0; fissure < 7; fissure++) {
+      const angle = fissure * Math.PI * 2 / 7 + rand(seed + target.index, fissure) * 0.42;
+      const reach = crack * (15 + rand(seed + 8, fissure) * 28);
+      const mid = {
+        x: base.x + Math.cos(angle + 0.20) * reach * 0.52,
+        y: base.y + Math.sin(angle + 0.20) * reach * 0.16
+      };
+      const end = {
+        x: base.x + Math.cos(angle) * reach,
+        y: base.y + Math.sin(angle) * reach * 0.20
+      };
+      pathGlow([base, mid, end], fissure % 2 ? COLORS.fire : COLORS.gold, alpha * 0.70, 1.0, 7);
+    }
+    discGlow(base.x, base.y - blast * 8, 10 + blast * 15, COLORS.fire, alpha * 0.76);
     for (let i = 0; i < 9; i++) {
       const angle = lerp(-Math.PI * 0.88, -Math.PI * 0.12, i / 8);
-      const distance = progress * (28 + rand(seed + target.index, i) * 48);
+      const distance = blast * (28 + rand(seed + target.index, i) * 48);
       pathGlow([base, { x: base.x + Math.cos(angle) * distance, y: base.y + Math.sin(angle) * distance }], COLORS.fire, alpha, 2 + rand(seed, i) * 2, 10);
+      const rock = {
+        x: base.x + Math.cos(angle) * distance,
+        y: base.y + Math.sin(angle) * distance + blast * blast * 10
+      };
+      drawChargeShard(rock, angle + Math.PI / 2, 2.5 + rand(seed + 31, i) * 3.5, i % 2 ? COLORS.fire : COLORS.gold, alpha * (1 - blast * 0.42));
     }
-    drawFracturing({ targets: [target], profile: { color: COLORS.fire }, seed }, 0.42 + progress * 0.28);
+    drawFracturing({ targets: [target], profile: { color: COLORS.fire }, seed }, 0.42 + blast * 0.28);
   }
 
   function drawFirestorm(target, p, alpha, seed) {
@@ -2041,6 +2252,8 @@
     const center = targetBodyPoint(target, 4);
     const ground = targetGroundPoint(target);
     ellipseGlow(ground.x, ground.y, 19 + local * 24, 5 + local * 6, COLORS.fire, alpha * 0.42, 1.3, p * 2.2);
+    const crownY = center.y - clamp((target.anchor?.height || 90) * 0.48, 34, 54);
+    ellipseGlow(center.x, crownY, 8 + local * 33, 2.5 + local * 7, COLORS.gold, alpha * 0.54, 1.1, -p * 3.4);
     for (let ring = 0; ring < 3; ring++) {
       const points = [];
       for (let i = 0; i <= 30; i++) {
@@ -2174,21 +2387,23 @@
       const local = clamp((p - 0.22) / 0.60);
       const alpha = fadeOut(p, 0.84);
       const control = { x: (target.point.x + effect.start.x) / 2, y: Math.min(target.point.y, effect.start.y) - 36 };
+      const headT = easeInOut(local);
+      const tailT = Math.max(0, headT - 0.56);
       const points = [];
       for (let i = 0; i <= 28; i++) {
-        const t = i / 28;
+        const t = lerp(tailT, headT, i / 28);
         const point = qBezier(target.point, control, effect.start, t);
         point.y += Math.sin(t * Math.PI * 7 + p * 10) * 5;
         points.push(point);
       }
       trailGlow(points, [220, 43, 116], alpha * clamp(local * 3), 1.3, 9);
       for (let i = 0; i < 8; i++) {
-        const t = (local + i / 8) % 1;
+        const t = clamp(headT - i * 0.075);
         const point = qBezier(target.point, control, effect.start, t);
         discGlow(point.x, point.y, 2.5 + rand(effect.seed, i) * 2.5, t > 0.7 ? COLORS.green : [220, 43, 116], alpha);
       }
       if (p > 0.52) impactRing(target.point, p, [220, 43, 116], effect.seed, 32);
-      if (p > 0.58) discGlow(effect.start.x, effect.start.y, 13, COLORS.green, alpha * 0.75);
+      if (headT > 0.88) discGlow(effect.start.x, effect.start.y, 8 + (headT - 0.88) * 42, COLORS.green, alpha * 0.75);
     }
   }
 
@@ -2227,10 +2442,31 @@
       }
       if (effect.profile.style === "manaSpring" && effect.targets?.length) {
         const poolAlpha = smoothstep(0, 0.14, p) * (0.82 + Math.sin(p * Math.PI * 5) * 0.08);
+        const fountainPreview = clamp((p - 0.62) / 0.38) * 0.46;
         for (const target of effect.targets) {
           withEffectClip(target.dropBounds || target.bounds, () => {
-            drawManaSpringPool(target, p, poolAlpha, effect.seed + target.index * 37);
+            if (fountainPreview > 0) drawManaFountain(effect, target, fountainPreview, poolAlpha);
+            else drawManaSpringPool(target, p, poolAlpha, effect.seed + target.index * 37);
           });
+        }
+      }
+      if (
+        MAGIC_STYLES.has(effect.profile.style)
+        && effect.profile.style !== "frostSurge"
+        && effect.profile.style !== "manaSpring"
+        && effect.targets?.length
+      ) {
+        // Start the spell itself during the final portion of the cast.  The
+        // completed battle packet then resumes around the impact phase, so the
+        // projectile or growing AOE does not appear as a finished static frame.
+        const previewProgress = clamp((p - 0.46) / 0.54) * 0.52;
+        if (previewProgress > 0) {
+          drawMagicProjectile({
+            ...effect,
+            kind: null,
+            start: { x: castCenter.x, y: castCenter.y },
+            targets: effect.profile.area ? effect.targets : effect.targets.slice(0, 1)
+          }, previewProgress, effect.profile.style);
         }
       }
       return;
@@ -2730,6 +2966,7 @@
       else if (route === "arrow") drawArrow(effect, p, style);
       else if (route === "magic") drawMagicProjectile(effect, p, style);
     }
+    if (!effect.kind && !effect.enemy && effect.isCrit) drawCriticalImpact(effect, p);
     ctx.restore();
     if (!effect.kind) drawDamage(effect, p);
     return p < 1;
@@ -2737,6 +2974,7 @@
 
   function render(now) {
     animationFrame = 0;
+    if (!effectsEnabled) return;
     if (!ensureCanvas()) {
       animationFrame = requestAnimationFrame(render);
       return;
@@ -2750,6 +2988,7 @@
   }
 
   function requestRender() {
+    if (!effectsEnabled) return;
     if (!animationFrame) animationFrame = requestAnimationFrame(render);
   }
 
@@ -2776,7 +3015,7 @@
 
   function spawnCastEffect(playerIndex, abilityHrid, intervalValue) {
     const profile = getCastProfile(abilityHrid);
-    if (pageHidden || !profile) return;
+    if (!effectsEnabled || pageHidden || !profile) return;
     const auraSpec = AURA_SPECS[abilityHrid];
     const { players, monsters } = findCombatUnits();
     const player = players[playerIndex];
@@ -2789,22 +3028,22 @@
     const forwardTarget = firstMonsterRect
       ? { x: towardX, y: firstMonsterRect.top + firstMonsterRect.height / 2 }
       : { x: sourceAnchor.x + 80, y: sourceAnchor.y };
-    const targets = (profile.style === "frostSurge" || profile.style === "manaSpring")
+    const targets = (profile.magic && ATTACK_ABILITIES.has(abilityHrid))
       ? monsters.map((monster, index) => {
         if (monsterHp[index] === 0) return null;
         const anchor = unitAnchor(monster);
         const bounds = unitEffectBounds(monster);
         const dropBounds = unitDropBounds(monster);
-        if (!anchor || !bounds || !dropBounds) return null;
+        if (!anchor || !bounds) return null;
         return {
           index,
           precast: true,
           anchor,
           bounds,
-          dropBounds,
+          dropBounds: dropBounds || bounds,
           point: { x: anchor.x, y: anchor.y }
         };
-      }).filter(Boolean)
+      }).filter(Boolean).filter((_, index) => profile.area || index === 0)
       : [];
     stopCastEffect(playerIndex);
     activeEffects.push({
@@ -2849,7 +3088,7 @@
   }
 
   function spawnPlayerAttack(playerIndex, abilityHrid, hits, isCrit = false) {
-    if (pageHidden || !hits.length) return;
+    if (!effectsEnabled || pageHidden || !hits.length) return;
     const profile = PROFILES[abilityHrid] || PROFILES.autoAttack;
     const { players, monsters } = findCombatUnits();
     const player = players[playerIndex];
@@ -2878,6 +3117,7 @@
         index: hit.index,
         damage: hit.damage,
         miss: Boolean(hit.miss),
+        crit: Boolean(hit.crit || (selected.length === 1 && isCrit)),
         anchor,
         bounds: unitEffectBounds(hit.element),
         dropBounds: unitDropBounds(hit.element),
@@ -2909,7 +3149,7 @@
   }
 
   function spawnEnemyAttack(monsterIndex, hits, isCrit = false) {
-    if (pageHidden || !hits.length) return;
+    if (!effectsEnabled || pageHidden || !hits.length) return;
     const { players, monsters } = findCombatUnits();
     const monster = monsters[monsterIndex];
     if (!monster || !players.length) return;
@@ -2919,7 +3159,7 @@
     const sourceAnchor = unitAnchor(monster, firstRect.left + firstRect.width / 2);
     const targets = validHits.map(hit => {
       const anchor = unitAnchor(hit.element);
-      return { index: hit.index, damage: hit.damage, anchor, point: { x: anchor.x, y: anchor.y } };
+      return { index: hit.index, damage: hit.damage, crit: Boolean(hit.crit || (validHits.length === 1 && isCrit)), anchor, point: { x: anchor.x, y: anchor.y } };
     });
     const profile = { style: "enemyAttack", color: COLORS.enemy, duration: 760 };
     activeEffects.push({
@@ -2939,6 +3179,7 @@
   }
 
   function spawnDirectHeal(casterIndex, abilityHrid) {
+    if (!effectsEnabled) return;
     if (pageHidden) return;
     const profile = HEAL_PROFILES[abilityHrid];
     if (!profile) return;
@@ -2975,6 +3216,7 @@
   }
 
   function spawnRippleProc(casterIndex, rippleChance) {
+    if (!effectsEnabled) return;
     if (pageHidden) return;
     const { players } = findCombatUnits();
     const caster = players[casterIndex];
@@ -3001,6 +3243,7 @@
   }
 
   function spawnBlazeProc(casterIndex, targetIndices, blazeChance) {
+    if (!effectsEnabled) return;
     if (pageHidden || !targetIndices.length) return;
     const { players, monsters } = findCombatUnits();
     const caster = players[casterIndex];
@@ -3043,6 +3286,7 @@
   }
 
   function spawnBloomHeal(casterIndex, targetIndex, healing, bloomChance) {
+    if (!effectsEnabled) return;
     if (pageHidden || !(healing > 0)) return;
     const { players } = findCombatUnits();
     const caster = players[casterIndex];
@@ -3663,6 +3907,13 @@
     } else if (attachedStatuses.size || attachedAuras.size) {
       requestRender();
     }
+  });
+  window.addEventListener(VFX_TOGGLE_EVENT, event => {
+    setEffectsEnabled(event?.detail?.enabled !== false);
+  });
+  window.addEventListener("storage", event => {
+    if (event.key !== VFX_TOGGLE_KEY) return;
+    setEffectsEnabled(event.newValue !== "false");
   });
   window.addEventListener("resize", resizeCanvas, { passive: true });
   document.addEventListener("DOMContentLoaded", ensureCanvas, { once: true });

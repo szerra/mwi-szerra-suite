@@ -966,6 +966,7 @@ GM_addStyle(`
         optShowDeaths: { zh: '显示死亡次数', en: 'Show Deaths' },
         optShowConsumables: { zh: '显示消耗品', en: 'Show Consumables' },
         optShowAbilities: { zh: '显示技能栏', en: 'Show Abilities' },
+        optShowSkillEffects: { zh: '顯示技能特效', en: 'Show Skill Effects' },
         optMobileHorizontal: { zh: '移动端横向布局', en: 'Mobile Horizontal Layout' },
         abilityRowLabel: { zh: '技能', en: 'Skills' },
         consumableRowLabel: { zh: '消耗品', en: 'Supplies' },
@@ -1072,6 +1073,7 @@ GM_addStyle(`
             showDeaths: true,
             showConsumables: true,
             showAbilities: true,
+            showSkillEffects: true,
             mobileHorizontalLayout: true,
         },
     };
@@ -2431,6 +2433,19 @@ GM_addStyle(`
                 this.render();
             });
 
+            const skillEffectsToggle = Ui.elem('input', {
+                className: 'lll_single_toggleInput',
+                type: 'checkbox',
+                checked: localStorage.getItem('mwi.szerra.combatVfx.enabled') !== 'false',
+            });
+            skillEffectsToggle.addEventListener('change', () => {
+                Config.ui.showSkillEffects = skillEffectsToggle.checked;
+                ConfigManager.saveConfig();
+                localStorage.setItem('mwi.szerra.combatVfx.enabled', String(skillEffectsToggle.checked));
+                window.dispatchEvent(new CustomEvent('mwi-szerra-combat-vfx-toggle', {
+                    detail: { enabled: skillEffectsToggle.checked },
+                }));
+            });
             const mobileHorizontalToggle = Ui.elem('input', {
                 className: 'lll_single_toggleInput',
                 type: 'checkbox',
@@ -2466,6 +2481,7 @@ GM_addStyle(`
                 makeToggleRow(UiLocale.optShowDeaths[language], deathsToggle),
                 makeToggleRow(UiLocale.optShowConsumables[language], consumablesToggle),
                 makeToggleRow(UiLocale.optShowAbilities[language], abilitiesToggle),
+                makeToggleRow(UiLocale.optShowSkillEffects[language], skillEffectsToggle),
                 makeToggleRow(UiLocale.optMobileHorizontal[language], mobileHorizontalToggle),
             ]);
 
