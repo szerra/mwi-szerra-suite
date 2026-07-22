@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI 戰鬥技能特效
 // @namespace    codex.local.mwi.combat-vfx
-// @version      0.1.22
+// @version      0.1.23
 // @description  攻擊讀條時在手前方顯示法陣，彈道同步命中，並把怪物狀態與全隊光環依實際持續時間附著在角色上。
 // @author       Local build for gzerr
 // @license      MIT
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.1.22";
+  const VERSION = "0.1.23";
   const CANVAS_ID = "mwiCombatVfxCanvas0118";
   const MONSTER_UNIT_CLASS = "mwiCombatVfxMonsterUnit";
   const ORIGINAL_SPLAT_STYLE_ID = "mwiCombatVfxOriginalMonsterSplatStyle";
@@ -1544,81 +1544,205 @@
 
     for (const target of effect.targets.slice(0, 1)) {
       if (mode === "iceSpear") {
-        const curve = projectileCurve(effect, target, p, 14);
-        trailGlow(curve.points, COLORS.ice, fadeOut(p, 0.70), 1.25, 8);
-        const angle = Math.atan2(target.point.y - effect.start.y, target.point.x - effect.start.x);
-        ctx.save();
-        ctx.translate(curve.head.x, curve.head.y);
-        ctx.rotate(angle);
-        ctx.globalCompositeOperation = "lighter";
-        ctx.fillStyle = rgba([230, 253, 255], fadeOut(p, 0.70));
-        ctx.shadowColor = rgba(COLORS.ice, fadeOut(p, 0.70));
-        ctx.shadowBlur = 9;
-        for (const shard of [
-          { x: 0, y: 0, length: 19, width: 6 },
-          { x: -5, y: -7, length: 13, width: 3.8 },
-          { x: -5, y: 7, length: 13, width: 3.8 }
-        ]) {
-          ctx.beginPath();
-          ctx.moveTo(shard.x + shard.length, shard.y);
-          ctx.lineTo(shard.x - shard.length * 0.48, shard.y - shard.width);
-          ctx.lineTo(shard.x - shard.length * 0.22, shard.y);
-          ctx.lineTo(shard.x - shard.length * 0.48, shard.y + shard.width);
-          ctx.closePath();
-          ctx.fill();
-        }
-        ctx.restore();
-        if (p > 0.52) {
-          impactRing(target.point, p, COLORS.ice, effect.seed, 41);
-          drawSnowflake(target.point, p, COLORS.ice);
-        }
+        drawIceSpearAttack(effect, target, p);
       } else if (mode === "smokeBurst") {
-        const curve = projectileCurve(effect, target, p, 18);
-        trailGlow(curve.points, effect.profile.color, fadeOut(p, 0.67), 1.15, 8);
-        const smokeBreath = 0.78 + Math.sin(p * Math.PI * 12) * 0.18;
-        for (let i = 0; i < 11; i++) {
-          const orbit = p * 7 + i * Math.PI * 2 / 11;
-          const radius = (5 + rand(effect.seed + 4, i) * 9) * smokeBreath;
-          discGlow(
-            curve.head.x + Math.cos(orbit) * radius,
-            curve.head.y + Math.sin(orbit) * radius * 0.72,
-            4 + rand(effect.seed + 8, i) * 8,
-            i % 3 ? [80, 54, 115] : [139, 91, 198],
-            fadeOut(p, 0.70) * 0.52
-          );
-        }
-        if (p > 0.50) {
-          drawPoisonCloud(target.point, p, effect.seed, [105, 76, 135]);
-          drawMuteGlyph(target.point, p, effect.profile.color);
-        }
+        drawSmokeBurstAttack(effect, target, p);
       } else if (mode === "waterStrike") {
-        const curve = projectileCurve(effect, target, p, 31);
-        trailGlow(curve.points, COLORS.water, fadeOut(p, 0.70), 1.25, 8);
-        drawWaterWake(effect, curve.points[0], curve.head, p);
-        discGlow(curve.head.x, curve.head.y, 4.8, [215, 250, 255], fadeOut(p, 0.70) * 0.82);
-        for (let drop = 0; drop < 4; drop++) {
-          const offset = (drop - 1.5) * 4.5;
-          drawStatusDrop(curve.head.x - 8 - drop * 3, curve.head.y + offset, 1.6 + drop * 0.25, COLORS.water, fadeOut(p, 0.70) * 0.64);
-        }
-        if (p > 0.52) {
-          impactRing(target.point, p, COLORS.water, effect.seed, 44);
-          drawWaterSplash(target.point, p, effect.seed);
-        }
+        drawWaterStrikeAttack(effect, target, p);
       } else if (mode === "fireball") {
-        const curve = projectileCurve(effect, target, p, 26);
-        trailGlow(curve.points, COLORS.fire, fadeOut(p, 0.70), 1.55, 9);
-        const flamePulse = 0.88 + Math.sin(p * Math.PI * 15) * 0.12;
-        discGlow(curve.head.x, curve.head.y, 10 * flamePulse, COLORS.fire, fadeOut(p, 0.70));
-        discGlow(curve.head.x + 1, curve.head.y - 1, 4.5 * flamePulse, [255, 234, 116], fadeOut(p, 0.70) * 0.92);
-        drawEmberTrail(effect, curve.points[0], curve.head, p);
-        if (p > 0.52) {
-          impactRing(target.point, p, COLORS.fire, effect.seed, 48);
-          sparkBurst(target.point, p, COLORS.gold, effect.seed + 23, 22, 54);
-        }
+        drawFireballAttack(effect, target, p);
       } else {
         console.error(`[MWI Combat VFX ${VERSION}] 法術沒有繪圖函式：${mode}`);
       }
     }
+  }
+
+  function drawWaterStrikeAttack(effect, target, p) {
+    const curve = projectileCurve(effect, target, p, 31);
+    const alpha = fadeOut(p, 0.78);
+    trailGlow(curve.points, [55, 178, 255], alpha * 0.86, 1.05, 7);
+    for (const strand of [-1, 1]) {
+      const points = curve.points.map((point, index) => {
+        const t = index / Math.max(1, curve.points.length - 1);
+        return {
+          x: point.x,
+          y: point.y + Math.sin(t * Math.PI * 4.5 + effect.seed * 0.08 + strand * 1.8) * (2.8 + t * 2.2) * strand
+        };
+      });
+      trailGlow(points, strand < 0 ? [152, 231, 255] : [52, 113, 255], alpha * 0.68, 0.68, 5);
+    }
+    discGlow(curve.head.x, curve.head.y, 4.2, [213, 251, 255], alpha * 0.84);
+    for (let i = 0; i < 8; i++) {
+      const index = Math.max(0, curve.points.length - 1 - i * 2);
+      const point = curve.points[index];
+      if (!point) continue;
+      drawStatusDrop(
+        point.x + (rand(effect.seed + 31, i) - 0.5) * 12,
+        point.y + (rand(effect.seed + 47, i) - 0.5) * 10,
+        1.1 + rand(effect.seed + 63, i) * 1.4,
+        i % 2 ? COLORS.cyan : [191, 243, 255],
+        alpha * 0.64
+      );
+    }
+    if (p > 0.50) drawWaterImpact(target, p, effect.seed);
+  }
+
+  function drawWaterImpact(target, p, seed) {
+    const local = clamp((p - 0.50) / 0.46);
+    const alpha = 1 - smoothstep(0.62, 1, local);
+    const center = targetBodyPoint(target, 5);
+    const ground = targetGroundPoint(target);
+    const open = easeOut(local);
+    ellipseGlow(ground.x, ground.y, 10 + open * 29, 3 + open * 8, COLORS.water, alpha * 0.78, 1.25, local * 2.1);
+    ellipseGlow(ground.x, ground.y, 5 + open * 20, 2 + open * 5, [206, 248, 255], alpha * 0.62, 0.82, -local * 2.8);
+    for (let jet = 0; jet < 5; jet++) {
+      const side = (jet - 2) / 2;
+      const height = (30 + (2 - Math.abs(jet - 2)) * 10 + rand(seed, jet) * 13) * open;
+      const end = { x: center.x + side * (22 + open * 15), y: center.y - height };
+      const control = { x: center.x - side * 10, y: center.y - height * 0.56 };
+      const points = [];
+      for (let i = 0; i <= 16; i++) points.push(qBezier(center, control, end, i / 16));
+      pathGlow(points, jet === 2 ? [224, 253, 255] : (jet % 2 ? COLORS.water : [93, 207, 255]), alpha * (jet === 2 ? 0.88 : 0.66), jet === 2 ? 1.35 : 0.86, 7);
+      drawStatusDrop(end.x, end.y + open * 5, 1.7 + (jet % 2) * 0.8, [174, 236, 255], alpha * 0.74);
+    }
+    for (let i = 0; i < 12; i++) {
+      const angle = lerp(-Math.PI * 0.92, -Math.PI * 0.08, rand(seed + 17, i));
+      const distance = open * (19 + rand(seed + 29, i) * 42);
+      const point = { x: center.x + Math.cos(angle) * distance, y: center.y + Math.sin(angle) * distance + local * local * 13 };
+      discGlow(point.x, point.y, 1.1 + rand(seed + 41, i) * 1.9, i % 3 ? COLORS.cyan : [225, 253, 255], alpha * 0.72);
+    }
+  }
+
+  function drawFacetedIceSpear(point, angle, scale, alpha) {
+    if (!point || alpha <= 0) return;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.translate(point.x, point.y);
+    ctx.rotate(angle);
+    ctx.shadowColor = rgba(COLORS.ice, alpha);
+    ctx.shadowBlur = 11;
+    const gradient = ctx.createLinearGradient(-scale, 0, scale, 0);
+    gradient.addColorStop(0, rgba([43, 143, 226], alpha * 0.52));
+    gradient.addColorStop(0.55, rgba([168, 238, 255], alpha * 0.78));
+    gradient.addColorStop(1, rgba([242, 255, 255], alpha));
+    ctx.fillStyle = gradient;
+    ctx.strokeStyle = rgba([232, 254, 255], alpha);
+    ctx.lineWidth = 0.95;
+    ctx.beginPath();
+    ctx.moveTo(scale * 1.35, 0);
+    ctx.lineTo(-scale * 0.44, -scale * 0.31);
+    ctx.lineTo(-scale * 0.18, 0);
+    ctx.lineTo(-scale * 0.44, scale * 0.31);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(scale * 1.12, 0);
+    ctx.lineTo(-scale * 0.28, 0);
+    ctx.strokeStyle = rgba([255, 255, 255], alpha * 0.9);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawIceSpearAttack(effect, target, p) {
+    const curve = projectileCurve(effect, target, p, 16);
+    const alpha = fadeOut(p, 0.78);
+    trailGlow(curve.points, [104, 202, 255], alpha * 0.76, 0.88, 7);
+    const before = curve.points[Math.max(0, curve.points.length - 3)] || effect.start;
+    const angle = Math.atan2(curve.head.y - before.y, curve.head.x - before.x);
+    if (curve.travel < 0.995) drawFacetedIceSpear(curve.head, angle, 13, alpha);
+    for (let i = 0; i < 6; i++) {
+      const index = Math.max(0, curve.points.length - 3 - i * 3);
+      const point = curve.points[index];
+      if (!point) continue;
+      drawChargeShard(point, angle + Math.PI + (i % 2 ? 0.45 : -0.45), 2.4 + (i % 3), COLORS.ice, alpha * 0.54);
+    }
+    if (p > 0.50) {
+      const local = clamp((p - 0.50) / 0.45);
+      const burstAlpha = 1 - smoothstep(0.58, 1, local);
+      const center = targetBodyPoint(target);
+      discGlow(center.x, center.y, 6 + easeOut(local) * 12, COLORS.ice, burstAlpha * 0.7);
+      for (let i = 0; i < 15; i++) {
+        const shardAngle = rand(effect.seed + 71, i) * Math.PI * 2;
+        const distance = easeOut(local) * (14 + rand(effect.seed + 83, i) * 38);
+        const point = { x: center.x + Math.cos(shardAngle) * distance, y: center.y + Math.sin(shardAngle) * distance };
+        drawChargeShard(point, shardAngle, 2.8 + rand(effect.seed + 97, i) * 5, i % 3 ? COLORS.ice : [235, 254, 255], burstAlpha * 0.78);
+      }
+      drawSnowflake({ x: center.x, y: center.y - 5 }, 0.54 + local * 0.2, COLORS.ice);
+      impactRing(center, p, COLORS.ice, effect.seed, 43);
+    }
+  }
+
+  function drawFireballAttack(effect, target, p) {
+    const curve = projectileCurve(effect, target, p, 27);
+    const alpha = fadeOut(p, 0.78);
+    trailGlow(curve.points, [255, 72, 16], alpha * 0.74, 1.15, 8);
+    for (let strand = 0; strand < 2; strand++) {
+      const points = curve.points.map((point, index) => ({
+        x: point.x,
+        y: point.y + Math.sin(index * 0.76 + p * 14 + strand * Math.PI) * (2.6 + strand * 1.2)
+      }));
+      trailGlow(points, strand ? COLORS.gold : [255, 39, 12], alpha * 0.52, 0.72, 6);
+    }
+    if (curve.travel < 0.995) {
+      discGlow(curve.head.x, curve.head.y, 9.5, [255, 61, 13], alpha * 0.96);
+      discGlow(curve.head.x, curve.head.y, 4.2, [255, 236, 139], alpha);
+      drawStatusFlame(curve.head.x - 2, curve.head.y + 1, 13, alpha * 0.9, p * 19 + effect.seed);
+    }
+    drawEmberTrail(effect, curve.points[0], curve.head, p);
+    if (p > 0.50) drawFireExplosion(target, p, effect.seed);
+  }
+
+  function drawFireExplosion(target, p, seed) {
+    const local = clamp((p - 0.50) / 0.46);
+    const alpha = 1 - smoothstep(0.56, 1, local);
+    const center = targetBodyPoint(target);
+    const open = easeOut(local);
+    discGlow(center.x, center.y, 9 + open * 18, COLORS.fire, alpha * 0.86);
+    discGlow(center.x, center.y, 4 + open * 8, [255, 225, 95], alpha * 0.95);
+    for (let i = 0; i < 18; i++) {
+      const angle = i * Math.PI * 2 / 18 + rand(seed, i) * 0.18;
+      const distance = open * (20 + rand(seed + 17, i) * 42);
+      const start = { x: center.x + Math.cos(angle) * distance * 0.24, y: center.y + Math.sin(angle) * distance * 0.24 };
+      const end = { x: center.x + Math.cos(angle) * distance, y: center.y + Math.sin(angle) * distance };
+      pathGlow([start, end], i % 3 ? COLORS.fire : COLORS.gold, alpha * (0.52 + rand(seed + 31, i) * 0.32), 0.75 + rand(seed + 43, i) * 0.75, 6);
+    }
+    ellipseGlow(center.x, center.y, 10 + open * 34, 8 + open * 29, [255, 126, 24], alpha * 0.68, 1.4, local * 1.8);
+  }
+
+  function drawSmokeBurstAttack(effect, target, p) {
+    const curve = projectileCurve(effect, target, p, 20);
+    const alpha = fadeOut(p, 0.80);
+    trailGlow(curve.points, [146, 83, 222], alpha * 0.58, 0.92, 8);
+    for (let i = 0; i < 12; i++) {
+      const index = Math.max(0, curve.points.length - 1 - Math.floor(i * 1.5));
+      const point = curve.points[index] || curve.head;
+      discGlow(
+        point.x + (rand(effect.seed + 11, i) - 0.5) * 19,
+        point.y + (rand(effect.seed + 23, i) - 0.5) * 17,
+        3.5 + rand(effect.seed + 37, i) * 6.5,
+        i % 3 ? [105, 65, 164] : [188, 102, 245],
+        alpha * 0.38
+      );
+    }
+    if (p <= 0.50) return;
+    const local = clamp((p - 0.50) / 0.48);
+    const burstAlpha = 1 - smoothstep(0.66, 1, local);
+    const center = targetBodyPoint(target);
+    for (let i = 0; i < 19; i++) {
+      const angle = rand(effect.seed + 61, i) * Math.PI * 2;
+      const distance = easeOut(local) * (7 + rand(effect.seed + 73, i) * 38);
+      const rise = easeOut(local) * (8 + rand(effect.seed + 89, i) * 24);
+      discGlow(
+        center.x + Math.cos(angle) * distance,
+        center.y + Math.sin(angle) * distance * 0.54 - rise,
+        5 + rand(effect.seed + 101, i) * 11,
+        i % 4 ? [104, 66, 153] : [170, 88, 230],
+        burstAlpha * 0.42
+      );
+    }
+    drawMuteGlyph({ x: center.x, y: center.y - 7 }, 0.56 + local * 0.19, [205, 116, 255]);
+    ellipseGlow(center.x, center.y + 8, 12 + easeOut(local) * 31, 5 + easeOut(local) * 12, [141, 77, 205], burstAlpha * 0.58, 1.2, local * 2);
   }
 
   function drawWaterSplash(point, p, seed) {
@@ -1666,8 +1790,9 @@
           impactRing(target.point, p, effect.profile.color, effect.seed + target.index * 9, mode === "firestorm" ? 46 : 35);
         }
       };
-      if (mode === "frostSurge" || mode === "manaSpring") withEffectClip(target.dropBounds || target.bounds, drawTargetEffect);
-      else drawTargetEffect();
+      // Keep every AOE centered inside the matching monster card.  This avoids
+      // the old effect drifting across neighbouring monsters in multi-target fights.
+      withEffectClip(target.dropBounds || target.bounds, drawTargetEffect);
     }
   }
 
@@ -2181,6 +2306,7 @@
       );
     }
     if (progress > 0.42) drawCrackedShield(target.point, 0.56 + progress * 0.25, COLORS.poison);
+    drawToxicDustOrnament(target, progress, alpha, seed);
   }
 
   function drawSporeVeil(target, progress, alpha, seed) {
@@ -2213,6 +2339,7 @@
     const eyeAlpha = alpha * smoothstep(0.38, 0.72, progress);
     ellipseGlow(eye.x, eye.y, 13, 8, COLORS.teal, eyeAlpha, 1.6);
     pathGlow([{ x: eye.x - 11, y: eye.y - 9 }, { x: eye.x + 11, y: eye.y + 9 }], COLORS.teal, eyeAlpha, 2, 6);
+    drawSporeVeilOrnament(target, progress, alpha, seed);
   }
 
   function drawLavaEruption(target, progress, alpha, seed) {
@@ -2245,6 +2372,7 @@
       drawChargeShard(rock, angle + Math.PI / 2, 2.5 + rand(seed + 31, i) * 3.5, i % 2 ? COLORS.fire : COLORS.gold, alpha * (1 - blast * 0.42));
     }
     drawFracturing({ targets: [target], profile: { color: COLORS.fire }, seed }, 0.42 + blast * 0.28);
+    drawLavaOrnament(target, progress, alpha, seed);
   }
 
   function drawFirestorm(target, p, alpha, seed) {
@@ -2266,6 +2394,134 @@
         });
       }
       pathGlow(points, ring === 1 ? COLORS.gold : COLORS.fire, alpha * (0.72 - ring * 0.12), 2.5 + ring, 13);
+    }
+    drawFirestormOrnament(target, p, alpha, seed);
+  }
+
+  function drawMushroom(x, y, size, color, alpha, sway = 0) {
+    if (alpha <= 0) return;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.translate(x, y);
+    ctx.rotate(sway);
+    ctx.shadowColor = rgba(color, alpha);
+    ctx.shadowBlur = 7;
+    const stemGradient = ctx.createLinearGradient(0, -size, 0, 0);
+    stemGradient.addColorStop(0, rgba([225, 255, 245], alpha * 0.92));
+    stemGradient.addColorStop(1, rgba(color, alpha * 0.42));
+    ctx.fillStyle = stemGradient;
+    ctx.fillRect(-size * 0.12, -size * 0.62, size * 0.24, size * 0.66);
+    ctx.fillStyle = rgba(color, alpha * 0.58);
+    ctx.strokeStyle = rgba([208, 255, 242], alpha * 0.86);
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.70, -size * 0.58);
+    ctx.quadraticCurveTo(0, -size * 1.35, size * 0.70, -size * 0.58);
+    ctx.quadraticCurveTo(0, -size * 0.27, -size * 0.70, -size * 0.58);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawMagmaRock(x, y, size, rotation, alpha, seed) {
+    if (alpha <= 0) return;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.translate(x, y);
+    ctx.rotate(rotation);
+    ctx.shadowColor = rgba(COLORS.fire, alpha);
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = rgba([91, 35, 19], alpha * 0.92);
+    ctx.strokeStyle = rgba([255, 100, 18], alpha * 0.9);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.75, size * 0.42);
+    ctx.lineTo(-size * 0.35, -size * 0.64);
+    ctx.lineTo(size * 0.46, -size * 0.48);
+    ctx.lineTo(size * 0.78, size * 0.28);
+    ctx.lineTo(size * 0.08, size * 0.67);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    pathGlow([{ x: -size * 0.35, y: -size * 0.31 }, { x: 0, y: 0 }, { x: size * 0.31, y: size * 0.23 }], seed % 2 ? COLORS.gold : COLORS.fire, alpha * 0.72, 0.62, 4);
+    ctx.restore();
+  }
+
+  function drawToxicDustOrnament(target, progress, alpha, seed) {
+    const anchor = target.anchor || {};
+    const center = targetBodyPoint(target, 5);
+    const ground = targetGroundPoint(target);
+    const open = easeOut(progress);
+    const width = clamp((anchor.width || 90) * 0.42, 30, 46);
+    for (let cloud = 0; cloud < 7; cloud++) {
+      const x = center.x + (cloud - 3) * width * 0.22 + Math.sin(progress * 7 + cloud) * 3;
+      const y = center.y + 13 - Math.abs(cloud - 3) * 2 - open * (8 + (cloud % 3) * 5);
+      discGlow(x, y, 8 + open * (7 + (cloud % 3) * 3), cloud % 3 ? [139, 185, 24] : [205, 232, 48], alpha * 0.30);
+    }
+    ellipseGlow(ground.x, ground.y, 12 + open * width, 4 + open * 10, [133, 180, 24], alpha * 0.48, 1.15, progress * 1.9);
+    const sigil = { x: center.x, y: center.y - clamp((anchor.height || 90) * 0.37, 26, 39) };
+    drawShield(sigil, COLORS.poison, alpha * 0.82, 0.72 + open * 0.18);
+    pathGlow([{ x: sigil.x - 8, y: sigil.y - 10 }, { x: sigil.x + 8, y: sigil.y + 10 }], [235, 251, 104], alpha * 0.78, 1.15, 5);
+  }
+
+  function drawSporeVeilOrnament(target, progress, alpha, seed) {
+    const anchor = target.anchor || {};
+    const center = targetBodyPoint(target, 7);
+    const ground = targetGroundPoint(target);
+    const open = easeOut(progress);
+    const width = clamp((anchor.width || 90) * 0.44, 31, 47);
+    ellipseGlow(ground.x, ground.y, 13 + open * width, 4 + open * 9, COLORS.teal, alpha * 0.36, 1.05, -progress * 1.7);
+    for (let mushroom = 0; mushroom < 7; mushroom++) {
+      const side = mushroom - 3;
+      const size = (5.5 + (mushroom % 3) * 2.3) * open;
+      drawMushroom(
+        ground.x + side * width * 0.22,
+        ground.y - Math.abs(side) * 0.8,
+        size,
+        mushroom % 2 ? [78, 235, 198] : [126, 255, 224],
+        alpha * (0.48 + (mushroom % 3) * 0.07),
+        Math.sin(seed + mushroom) * 0.08
+      );
+    }
+    for (let layer = 0; layer < 6; layer++) {
+      const x = center.x + (layer - 2.5) * width * 0.28;
+      const y = center.y + 13 - Math.abs(layer - 2.5) * 2 - open * (8 + (layer % 3) * 5);
+      discGlow(x, y, 7 + open * (7 + layer % 3), layer % 2 ? [45, 183, 164] : [65, 232, 197], alpha * 0.24);
+    }
+  }
+
+  function drawLavaOrnament(target, progress, alpha, seed) {
+    const base = targetGroundPoint(target);
+    const body = targetBodyPoint(target, 9);
+    const open = easeOut(progress);
+    ellipseGlow(base.x, base.y, 10 + open * 38, 4 + open * 10, [255, 82, 13], alpha * 0.62, 1.3, progress * 2.2);
+    for (let rock = 0; rock < 7; rock++) {
+      const angle = lerp(-Math.PI * 0.86, -Math.PI * 0.14, rock / 6);
+      const distance = open * (25 + rand(seed + target.index * 11, rock) * 39);
+      const x = body.x + Math.cos(angle) * distance;
+      const y = body.y + Math.sin(angle) * distance + progress * progress * 13;
+      drawMagmaRock(x, y, 3.5 + rand(seed + 53, rock) * 5.2, angle + progress * 3, alpha * 0.76, rock);
+    }
+  }
+
+  function drawFirestormOrnament(target, p, alpha, seed) {
+    const anchor = target.anchor || {};
+    const center = targetBodyPoint(target, 5);
+    const ground = targetGroundPoint(target);
+    const local = easeOut(clamp((p - 0.28) / 0.48));
+    const radius = clamp((anchor.width || 90) * 0.43, 31, 46);
+    ellipseGlow(ground.x, ground.y, 9 + local * radius * 0.72, 3 + local * 7, COLORS.gold, alpha * 0.46, 0.9, -p * 2.8);
+    for (let flame = 0; flame < 7; flame++) {
+      const angle = p * 6.8 + flame * Math.PI * 2 / 7;
+      const x = center.x + Math.cos(angle) * radius * local * (0.35 + (flame % 3) * 0.18);
+      const y = ground.y - 4 + Math.sin(angle) * 7 - local * (flame % 2) * 11;
+      drawStatusFlame(x, y, 8 + (flame % 3) * 3.2, alpha * (0.60 + (flame % 2) * 0.14), p * 13 + flame);
+    }
+    for (let ember = 0; ember < 18; ember++) {
+      const angle = p * (3.2 + ember * 0.02) + rand(seed + 71, ember) * Math.PI * 2;
+      const drift = local * (12 + rand(seed + 83, ember) * radius);
+      discGlow(center.x + Math.cos(angle) * drift, ground.y - rand(seed + 97, ember) * (28 + local * 44), 1.0 + rand(seed + 109, ember) * 2.2, ember % 3 ? COLORS.fire : COLORS.gold, alpha * 0.66);
     }
   }
 
@@ -2376,6 +2632,26 @@
         ellipseGlow(ground.x, y, 10 + coil * 3.2, 3.2 + coil * 0.8, coil === 1 ? [210, 250, 78] : COLORS.green, bindAlpha * (0.72 - coil * 0.1), 0.85, p * (coil % 2 ? -2 : 2));
       }
 
+      // The final bind grows into a luminous thorn cocoon; the travelling
+      // vines above remain narrow so party rows do not become a thick beam.
+      for (let thorn = 0; thorn < 8; thorn++) {
+        const side = thorn % 2 ? 1 : -1;
+        const tier = Math.floor(thorn / 2);
+        const root = { x: ground.x + side * (8 + tier * 3.6) * bind, y: ground.y - tier * 9 * bind };
+        const tip = { x: ground.x + side * (18 + tier * 4.5) * bind, y: ground.y - (22 + tier * 10) * bind };
+        const control = { x: ground.x - side * (5 + tier * 2), y: lerp(root.y, tip.y, 0.48) };
+        const points = [];
+        for (let i = 0; i <= 14; i++) points.push(qBezier(root, control, tip, i / 14));
+        trailGlow(points, tier % 2 ? [211, 248, 78] : [80, 232, 104], bindAlpha * 0.68, 0.72, 5);
+        drawVineLeaf(tip, -Math.PI / 2 + side * 0.55, 4.6 + tier * 0.6, bindAlpha * 0.78, tier % 2 ? [220, 252, 91] : COLORS.green);
+      }
+      for (let mote = 0; mote < 12; mote++) {
+        const angle = p * 3.1 + rand(effect.seed + 171, mote) * Math.PI * 2;
+        const radius = bind * (9 + rand(effect.seed + 183, mote) * 30);
+        const y = ground.y - bind * (10 + rand(effect.seed + 197, mote) * 56);
+        discGlow(ground.x + Math.cos(angle) * radius, y, 1.0 + rand(effect.seed + 211, mote) * 2.1, mote % 3 ? COLORS.green : [224, 255, 98], bindAlpha * 0.68);
+      }
+
       const haloAlpha = bindAlpha * smoothstep(0.48, 0.92, bind);
       ellipseGlow(target.point.x, target.point.y - 48, 17, 4.3, [215, 252, 73], haloAlpha, 1.15, p * 1.5);
       discGlow(ground.x, ground.y - 3, 8 + bind * 8, COLORS.green, bindAlpha * 0.38);
@@ -2386,24 +2662,51 @@
     for (const target of effect.targets.slice(0, 1)) {
       const local = clamp((p - 0.22) / 0.60);
       const alpha = fadeOut(p, 0.84);
-      const control = { x: (target.point.x + effect.start.x) / 2, y: Math.min(target.point.y, effect.start.y) - 36 };
-      const headT = easeInOut(local);
-      const tailT = Math.max(0, headT - 0.56);
-      const points = [];
-      for (let i = 0; i <= 28; i++) {
-        const t = lerp(tailT, headT, i / 28);
-        const point = qBezier(target.point, control, effect.start, t);
-        point.y += Math.sin(t * Math.PI * 7 + p * 10) * 5;
-        points.push(point);
+      const targetCenter = targetBodyPoint(target);
+      const source = { x: effect.start.x, y: effect.start.y };
+      const drawAlpha = alpha * clamp(local * 3);
+      for (let strand = 0; strand < 4; strand++) {
+        const bend = (strand - 1.5) * 16;
+        const control = { x: (targetCenter.x + source.x) / 2, y: Math.min(targetCenter.y, source.y) - 31 + bend };
+        const headT = easeInOut(local);
+        const tailT = Math.max(0, headT - 0.72);
+        const points = [];
+        for (let i = 0; i <= 30; i++) {
+          const t = lerp(tailT, headT, i / 30);
+          const point = qBezier(targetCenter, control, source, t);
+          point.y += Math.sin(t * Math.PI * 7 + p * 11 + strand * 1.8) * (2.5 + strand * 0.7);
+          points.push(point);
+        }
+        trailGlow(points, strand % 2 ? [242, 43, 106] : [132, 42, 194], drawAlpha * (0.60 + strand * 0.07), 0.78 + strand * 0.13, 7);
       }
-      trailGlow(points, [220, 43, 116], alpha * clamp(local * 3), 1.3, 9);
-      for (let i = 0; i < 8; i++) {
-        const t = clamp(headT - i * 0.075);
-        const point = qBezier(target.point, control, effect.start, t);
-        discGlow(point.x, point.y, 2.5 + rand(effect.seed, i) * 2.5, t > 0.7 ? COLORS.green : [220, 43, 116], alpha);
+      for (let i = 0; i < 14; i++) {
+        const t = (easeInOut(local) + i / 14) % 1;
+        const control = { x: (targetCenter.x + source.x) / 2, y: Math.min(targetCenter.y, source.y) - 34 };
+        const point = qBezier(targetCenter, control, source, t);
+        const color = t > 0.70 ? [112, 252, 126] : (i % 3 ? [240, 50, 112] : [180, 58, 226]);
+        discGlow(point.x, point.y + Math.sin(t * Math.PI * 8 + i) * 5, 1.6 + rand(effect.seed + 17, i) * 3.1, color, alpha * 0.82);
       }
-      if (p > 0.52) impactRing(target.point, p, [220, 43, 116], effect.seed, 32);
-      if (headT > 0.88) discGlow(effect.start.x, effect.start.y, 8 + (headT - 0.88) * 42, COLORS.green, alpha * 0.75);
+      if (p > 0.49) {
+        const impact = clamp((p - 0.49) / 0.42);
+        const impactAlpha = 1 - smoothstep(0.60, 1, impact);
+        discGlow(targetCenter.x, targetCenter.y, 7 + easeOut(impact) * 14, [224, 39, 102], impactAlpha * 0.7);
+        for (let arc = 0; arc < 9; arc++) {
+          const angle = rand(effect.seed + 43, arc) * Math.PI * 2;
+          const distance = easeOut(impact) * (13 + rand(effect.seed + 59, arc) * 28);
+          const end = { x: targetCenter.x + Math.cos(angle) * distance, y: targetCenter.y + Math.sin(angle) * distance };
+          pathGlow([targetCenter, end], arc % 2 ? [235, 42, 105] : [147, 64, 216], impactAlpha * 0.64, 0.72, 5);
+        }
+        ellipseGlow(targetCenter.x, targetCenter.y - 39, 15, 4, [201, 67, 223], impactAlpha * 0.78, 1.1, p * 1.8);
+      }
+      if (p > 0.56) {
+        const heal = clamp((p - 0.56) / 0.36);
+        discGlow(source.x, source.y, 8 + easeOut(heal) * 12, COLORS.green, alpha * 0.72);
+        for (let cross = 0; cross < 7; cross++) {
+          const angle = p * 5 + cross * Math.PI * 2 / 7;
+          const radius = 9 + easeOut(heal) * (8 + (cross % 3) * 4);
+          drawHealingCross(source.x + Math.cos(angle) * radius, source.y + Math.sin(angle) * radius * 0.7, 2.1 + (cross % 2), [127, 255, 142], alpha * 0.72, 0.8);
+        }
+      }
     }
   }
 
