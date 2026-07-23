@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Szerra 戰鬥資訊包
 // @namespace    https://github.com/szerra/mwi-szerra-suite
-// @version      1.0.16
+// @version      1.0.17
 // @description  整合戰鬥 HUD、升級時間、模擬器匯入、掉落統計與戰鬥特效；可從 Tampermonkey 選單逐項開關。
 // @author       Szerra integration; see THIRD_PARTY_NOTICES.md
 // @license      CC-BY-NC-SA-4.0
@@ -124,7 +124,7 @@
 
   // ---------------------------------------------------------------------------
   // Module: 戰鬥技能特效
-  // Original: MWI 戰鬥技能特效.user.js v0.1.23
+  // Original: MWI 戰鬥技能特效.user.js v0.1.24
   // Author: Local build for gzerr
   // License: MIT
   // Source: https://github.com/szerra/mwi-combat-vfx
@@ -134,7 +134,7 @@
     (function () {
       "use strict";
     
-      const VERSION = "0.1.23";
+      const VERSION = "0.1.24";
       const CANVAS_ID = "mwiCombatVfxCanvas0118";
       const MONSTER_UNIT_CLASS = "mwiCombatVfxMonsterUnit";
       const ORIGINAL_SPLAT_STYLE_ID = "mwiCombatVfxOriginalMonsterSplatStyle";
@@ -1792,21 +1792,66 @@
       function drawFireballAttack(effect, target, p) {
         const curve = projectileCurve(effect, target, p, 27);
         const alpha = fadeOut(p, 0.78);
-        trailGlow(curve.points, [255, 72, 16], alpha * 0.74, 1.15, 8);
-        for (let strand = 0; strand < 2; strand++) {
+        const before = curve.points[Math.max(0, curve.points.length - 4)] || effect.start;
+        const angle = Math.atan2(curve.head.y - before.y, curve.head.x - before.x);
+        trailGlow(curve.points, [255, 72, 16], alpha * 0.82, 1.22, 9);
+        for (let strand = 0; strand < 3; strand++) {
           const points = curve.points.map((point, index) => ({
-            x: point.x,
-            y: point.y + Math.sin(index * 0.76 + p * 14 + strand * Math.PI) * (2.6 + strand * 1.2)
+            x: point.x - Math.cos(angle) * strand * 1.5,
+            y: point.y + Math.sin(index * 0.76 + p * 14 + strand * Math.PI * 0.72) * (2.6 + strand * 1.35)
           }));
-          trailGlow(points, strand ? COLORS.gold : [255, 39, 12], alpha * 0.52, 0.72, 6);
+          trailGlow(points, strand === 1 ? COLORS.gold : (strand === 2 ? [255, 146, 30] : [255, 39, 12]), alpha * (0.58 - strand * 0.08), 0.74 + strand * 0.08, 6);
         }
         if (curve.travel < 0.995) {
-          discGlow(curve.head.x, curve.head.y, 9.5, [255, 61, 13], alpha * 0.96);
-          discGlow(curve.head.x, curve.head.y, 4.2, [255, 236, 139], alpha);
-          drawStatusFlame(curve.head.x - 2, curve.head.y + 1, 13, alpha * 0.9, p * 19 + effect.seed);
+          drawLargeFireballCore(curve.head, angle, p, alpha, effect.seed);
         }
         drawEmberTrail(effect, curve.points[0], curve.head, p);
         if (p > 0.50) drawFireExplosion(target, p, effect.seed);
+      }
+    
+      function drawLargeFireballCore(head, angle, p, alpha, seed) {
+        const pulse = 0.94 + Math.sin(p * Math.PI * 17 + seed * 0.03) * 0.08;
+        const outerRadius = 16.5 * pulse;
+        const hotRadius = 8.2 * pulse;
+        discGlow(head.x, head.y, outerRadius, [255, 45, 8], alpha * 0.94);
+        discGlow(head.x + Math.cos(angle) * 1.5, head.y + Math.sin(angle) * 1.5, hotRadius, [255, 174, 34], alpha);
+        discGlow(head.x + Math.cos(angle) * 3, head.y + Math.sin(angle) * 3, 3.8 * pulse, [255, 250, 190], alpha * 0.98);
+    
+        // Flame tongues curl backwards from the large orb, matching the reference
+        // silhouette without turning the whole projectile into a thick cylinder.
+        for (let lick = 0; lick < 7; lick++) {
+          const side = lick - 3;
+          const perpendicular = angle + Math.PI / 2;
+          const root = {
+            x: head.x - Math.cos(angle) * (outerRadius * 0.20) + Math.cos(perpendicular) * side * 2.2,
+            y: head.y - Math.sin(angle) * (outerRadius * 0.20) + Math.sin(perpendicular) * side * 2.2
+          };
+          const curl = Math.sin(p * 18 + lick * 1.7 + seed * 0.05) * (3.2 + Math.abs(side) * 0.55);
+          const middle = {
+            x: head.x - Math.cos(angle) * (outerRadius * (0.78 + lick % 2 * 0.16)) + Math.cos(perpendicular) * (side * 2.8 + curl),
+            y: head.y - Math.sin(angle) * (outerRadius * (0.78 + lick % 2 * 0.16)) + Math.sin(perpendicular) * (side * 2.8 + curl)
+          };
+          const tip = {
+            x: head.x - Math.cos(angle) * (outerRadius * (1.32 + (lick % 3) * 0.20)) + Math.cos(perpendicular) * side * 3.4,
+            y: head.y - Math.sin(angle) * (outerRadius * (1.32 + (lick % 3) * 0.20)) + Math.sin(perpendicular) * side * 3.4
+          };
+          const points = [];
+          for (let step = 0; step <= 10; step++) points.push(qBezier(root, middle, tip, step / 10));
+          trailGlow(points, lick % 3 === 1 ? COLORS.gold : (lick % 2 ? [255, 99, 16] : [255, 42, 8]), alpha * (0.70 - Math.abs(side) * 0.055), 0.82 + (3 - Math.abs(side)) * 0.10, 7);
+        }
+    
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.translate(head.x, head.y);
+        ctx.rotate(angle);
+        ctx.strokeStyle = rgba([255, 231, 128], alpha * 0.82);
+        ctx.shadowColor = rgba(COLORS.fire, alpha);
+        ctx.shadowBlur = 9;
+        ctx.lineWidth = 1.05;
+        ctx.beginPath();
+        ctx.arc(0, 0, outerRadius * 0.72, -Math.PI * 0.70, Math.PI * 0.70);
+        ctx.stroke();
+        ctx.restore();
       }
     
       function drawFireExplosion(target, p, seed) {
