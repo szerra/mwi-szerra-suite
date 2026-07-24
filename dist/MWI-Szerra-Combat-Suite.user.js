@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Szerra 戰鬥資訊包
 // @namespace    https://github.com/szerra/mwi-szerra-suite
-// @version      1.0.17
+// @version      1.0.18
 // @description  整合戰鬥 HUD、升級時間、模擬器匯入、掉落統計與戰鬥特效；可從 Tampermonkey 選單逐項開關。
 // @author       Szerra integration; see THIRD_PARTY_NOTICES.md
 // @license      CC-BY-NC-SA-4.0
@@ -124,7 +124,7 @@
 
   // ---------------------------------------------------------------------------
   // Module: 戰鬥技能特效
-  // Original: MWI 戰鬥技能特效.user.js v0.1.24
+  // Original: MWI 戰鬥技能特效.user.js v0.1.25
   // Author: Local build for gzerr
   // License: MIT
   // Source: https://github.com/szerra/mwi-combat-vfx
@@ -134,7 +134,7 @@
     (function () {
       "use strict";
     
-      const VERSION = "0.1.24";
+      const VERSION = "0.1.25";
       const CANVAS_ID = "mwiCombatVfxCanvas0118";
       const MONSTER_UNIT_CLASS = "mwiCombatVfxMonsterUnit";
       const ORIGINAL_SPLAT_STYLE_ID = "mwiCombatVfxOriginalMonsterSplatStyle";
@@ -144,6 +144,8 @@
       const HP_TRAIL_CLASS = "mwiCombatVfxHpTrail";
       const HP_TRAIL_DELAY = 90;
       const HP_TRAIL_DURATION = 460;
+      const MAGIC_CAST_PREVIEW_START = 0.46;
+      const MAGIC_CAST_HANDOFF_PROGRESS = 0.49;
       const hpTrailStates = new WeakMap();
     
       if (window.__mwiCombatVfx0118Installed) return;
@@ -351,6 +353,7 @@
       let effectSequence = 0;
       let battleGeneration = 0;
       let activeEffects = [];
+      let activeCastEffects = new Map();
       let attachedStatuses = new Map();
       let attachedAuras = new Map();
       let pageHidden = document.hidden;
@@ -379,6 +382,7 @@
           return;
         }
         activeEffects = [];
+        activeCastEffects.clear();
         attachedStatuses.clear();
         attachedAuras.clear();
         if (animationFrame) cancelAnimationFrame(animationFrame);
@@ -1648,7 +1652,7 @@
     
       function drawMagicProjectile(effect, p, mode) {
         const castAlpha = clamp(p / 0.16) * (1 - smoothstep(0.48, 0.70, p));
-        if (effect.targets[0]) {
+        if (effect.targets[0] && !effect.continuedFromCast) {
           verticalMagicCircle(effect.sourceAnchor, effect.targets[0].point, effect.profile.color, castAlpha, p * 8 + effect.seed, 27);
         }
     
@@ -2920,10 +2924,12 @@
             && effect.profile.style !== "manaSpring"
             && effect.targets?.length
           ) {
-            // Start the spell itself during the final portion of the cast.  The
-            // completed battle packet then resumes around the impact phase, so the
-            // projectile or growing AOE does not appear as a finished static frame.
-            const previewProgress = clamp((p - 0.46) / 0.54) * 0.52;
+            // The actual cast interval can change with combat speed.  Drive the
+            // outgoing spell with normalized cast progress so it always reaches
+            // the target at the packet-confirmed cast completion.  Stop immediately
+            // before the impact phase; the completed packet promotes this same
+            // visual instead of spawning a second no-damage impact.
+            const previewProgress = magicCastPreviewProgress(p);
             if (previewProgress > 0) {
               drawMagicProjectile({
                 ...effect,
@@ -3462,8 +3468,33 @@
         return clamp(milliseconds, 350, 6000);
       }
     
+      function magicCastPreviewProgress(castProgress) {
+        return clamp(
+          (castProgress - MAGIC_CAST_PREVIEW_START) / (1 - MAGIC_CAST_PREVIEW_START)
+        ) * MAGIC_CAST_HANDOFF_PROGRESS;
+      }
+    
+      function completedCastHandoffProgress(effect, abilityHrid, now) {
+        if (
+          !effect
+          || effect.abilityHrid !== abilityHrid
+          || effect.supportCast
+          || STYLE_ROUTES[effect.profile?.style] !== "magic"
+          || effect.profile.style === "frostSurge"
+          || effect.profile.style === "manaSpring"
+        ) {
+          return null;
+        }
+        const castProgress = clamp((now - effect.startedAt) / effect.duration);
+        const previewProgress = magicCastPreviewProgress(castProgress);
+        return previewProgress > 0 ? previewProgress : null;
+      }
+    
       function stopCastEffect(playerIndex) {
+        const stopped = activeCastEffects.get(playerIndex) || null;
+        activeCastEffects.delete(playerIndex);
         activeEffects = activeEffects.filter(effect => !(effect.kind === "cast" && effect.playerIndex === playerIndex));
+        return stopped;
       }
     
       function getCastProfile(abilityHrid) {
@@ -3510,7 +3541,7 @@
           }).filter(Boolean).filter((_, index) => profile.area || index === 0)
           : [];
         stopCastEffect(playerIndex);
-        activeEffects.push({
+        const castEffect = {
           id: ++effectSequence,
           kind: "cast",
           playerIndex,
@@ -3523,7 +3554,9 @@
           seed: effectSequence * 131 + playerIndex * 29,
           duration: intervalToMilliseconds(intervalValue),
           startedAt: performance.now()
-        });
+        };
+        activeCastEffects.set(playerIndex, castEffect);
+        activeEffects.push(castEffect);
         requestRender();
       }
     
@@ -3544,14 +3577,17 @@
         return 0.52;
       }
     
-      function syncedAttackStartedAt(profile, missed = false) {
+      function syncedAttackStartedAt(profile, missed = false, handoffProgress = null) {
         const now = performance.now();
+        if (Number.isFinite(handoffProgress) && handoffProgress > 0) {
+          return now - profile.duration * clamp(handoffProgress, 0, MAGIC_CAST_HANDOFF_PROGRESS);
+        }
         if (missed) return now;
         const impactDelay = 75;
         return now - Math.max(0, profile.duration * visualImpactPhase(profile) - impactDelay);
       }
     
-      function spawnPlayerAttack(playerIndex, abilityHrid, hits, isCrit = false) {
+      function spawnPlayerAttack(playerIndex, abilityHrid, hits, isCrit = false, handoffProgress = null) {
         if (!effectsEnabled || pageHidden || !hits.length) return;
         const profile = PROFILES[abilityHrid] || PROFILES.autoAttack;
         const { players, monsters } = findCombatUnits();
@@ -3605,9 +3641,10 @@
           start: { x: start.x, y: start.y },
           targets,
           isCrit,
+          continuedFromCast: Number.isFinite(handoffProgress) && handoffProgress > 0,
           enemy: false,
           duration: profile.duration,
-          startedAt: syncedAttackStartedAt(profile, targets.every(target => target.miss))
+          startedAt: syncedAttackStartedAt(profile, targets.every(target => target.miss), handoffProgress)
         });
         requestRender();
       }
@@ -4059,7 +4096,13 @@
       function spawnMissedPlayerAttack(cast, preferredTargetIndex = -1) {
         const targetIndex = preferredTargetIndex >= 0 ? preferredTargetIndex : choosePrimaryMonsterTarget();
         if (targetIndex >= 0) {
-          spawnPlayerAttack(cast.index, cast.abilityHrid, [{ index: targetIndex, damage: 0, miss: true }], false);
+          spawnPlayerAttack(
+            cast.index,
+            cast.abilityHrid,
+            [{ index: targetIndex, damage: 0, miss: true }],
+            false,
+            cast.handoffProgress
+          );
         }
       }
     
@@ -4103,6 +4146,7 @@
           playerBlazeChance = obj.players.map(player => numberOr(player?.combatDetails?.combatStats?.blaze, 0));
           clearPendingCasts(pendingMonsterCasts);
           activeEffects = [];
+          activeCastEffects.clear();
           attachedStatuses.clear();
           attachedAuras.clear();
           obj.monsters.forEach((monster, index) => {
@@ -4155,9 +4199,15 @@
           const abilityHrid = typeof player.abilityHrid === "string" ? player.abilityHrid : "";
           if (Number.isFinite(currentAtk) && (!Number.isFinite(previousAtk) || currentAtk > previousAtk)) {
             const completedAbility = playerPreparingAbility[index] || "autoAttack";
-            stopCastEffect(index);
+            const completedCastEffect = stopCastEffect(index);
+            const handoffProgress = completedCastHandoffProgress(completedCastEffect, completedAbility, now);
             if (ATTACK_ABILITIES.has(completedAbility)) {
-              completedPlayerCasts.push({ index, abilityHrid: completedAbility, counter: currentAtk });
+              completedPlayerCasts.push({
+                index,
+                abilityHrid: completedAbility,
+                counter: currentAtk,
+                handoffProgress
+              });
             }
             if (AURA_SPECS[completedAbility]) {
               completedAuraCasts.push({ index, abilityHrid: completedAbility });
@@ -4260,14 +4310,21 @@
                   cast.index,
                   cast.abilityHrid,
                   fountainTargets,
-                  fountainTargets.some(hit => hit.crit)
+                  fountainTargets.some(hit => hit.crit),
+                  cast.handoffProgress
                 );
               }
               continue;
             }
             if (profile.area || profile.chain) {
               if (monsterHits.length) {
-                spawnPlayerAttack(cast.index, cast.abilityHrid, monsterHits, monsterHits.some(hit => hit.crit));
+                spawnPlayerAttack(
+                  cast.index,
+                  cast.abilityHrid,
+                  monsterHits,
+                  monsterHits.some(hit => hit.crit),
+                  cast.handoffProgress
+                );
                 applyInferredStatuses(cast.abilityHrid, monsterHits);
               } else {
                 spawnMissedPlayerAttack(cast, primaryMonsterIndexBeforeUpdate);
@@ -4284,7 +4341,13 @@
               : (monsterSplats[0]?.index ?? monsterHits[0]?.index ?? -1);
             const targetHit = monsterHits.find(hit => hit.index === targetIndex);
             if (targetHit) {
-              spawnPlayerAttack(cast.index, cast.abilityHrid, [targetHit], targetHit.crit);
+              spawnPlayerAttack(
+                cast.index,
+                cast.abilityHrid,
+                [targetHit],
+                targetHit.crit,
+                cast.handoffProgress
+              );
               applyInferredStatuses(cast.abilityHrid, [targetHit]);
             } else {
               spawnMissedPlayerAttack(cast, targetIndex);
@@ -4365,6 +4428,7 @@
         pageHidden = document.hidden;
         if (pageHidden) {
           activeEffects = [];
+          activeCastEffects.clear();
           if (animationFrame) cancelAnimationFrame(animationFrame);
           animationFrame = 0;
           if (ctx) ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
