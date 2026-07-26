@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Szerra 角色資訊包
 // @namespace    https://github.com/szerra/mwi-szerra-suite
-// @version      1.0.0
+// @version      1.0.1
 // @description  整合 Talent Market、裝備同步、角色名片與技能需求提示；可從 Tampermonkey 選單逐項開關。
 // @author       Szerra integration; see THIRD_PARTY_NOTICES.md
 // @license      CC-BY-NC-SA-4.0
@@ -4373,6 +4373,9 @@
             updateItems(data) {
                 if (!DataStore.isLoaded || !data.characterItems) return;
                 DataStore.characterItems = data.characterItems;
+                if (DataStore.raw) {
+                    DataStore.raw.characterItems = data.characterItems;
+                }
                 DataStore.currentEquipmentMap = {};
                 DataStore.characterItems.forEach(item => {
                     if (item.itemLocationHrid && item.itemLocationHrid !== "/item_locations/inventory") {
@@ -4382,6 +4385,22 @@
                 const weaponInfo = getWeapon(DataStore.currentEquipmentMap);
                 DataStore.weaponType = weaponInfo.zh;
                 DataStore.weaponTypeEN = weaponInfo.en;
+                if (this._buildScoreRefreshTimer) {
+                    clearTimeout(this._buildScoreRefreshTimer);
+                }
+                const self = this;
+                this._buildScoreRefreshTimer = setTimeout(async () => {
+                    self._buildScoreRefreshTimer = null;
+                    try {
+                        const scoreResult = await BuildScoreModule.calculateBuildScore(DataStore.raw);
+                        if (!scoreResult) return;
+                        DataStore.buildScore = scoreResult.total;
+                        window.dispatchEvent(new CustomEvent('mwi_buildscore_updated', {
+                            detail: { buildScore: DataStore.buildScore }
+                        }));
+                        self._debouncedSaveSimData();
+                    } catch (e) {}
+                }, 500);
             },
             getNameFromDOM() {
                 const selectors = [

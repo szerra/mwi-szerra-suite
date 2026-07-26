@@ -2203,6 +2203,9 @@
         updateItems(data) {
             if (!DataStore.isLoaded || !data.characterItems) return;
             DataStore.characterItems = data.characterItems;
+            if (DataStore.raw) {
+                DataStore.raw.characterItems = data.characterItems;
+            }
             DataStore.currentEquipmentMap = {};
             DataStore.characterItems.forEach(item => {
                 if (item.itemLocationHrid && item.itemLocationHrid !== "/item_locations/inventory") {
@@ -2212,6 +2215,22 @@
             const weaponInfo = getWeapon(DataStore.currentEquipmentMap);
             DataStore.weaponType = weaponInfo.zh;
             DataStore.weaponTypeEN = weaponInfo.en;
+            if (this._buildScoreRefreshTimer) {
+                clearTimeout(this._buildScoreRefreshTimer);
+            }
+            const self = this;
+            this._buildScoreRefreshTimer = setTimeout(async () => {
+                self._buildScoreRefreshTimer = null;
+                try {
+                    const scoreResult = await BuildScoreModule.calculateBuildScore(DataStore.raw);
+                    if (!scoreResult) return;
+                    DataStore.buildScore = scoreResult.total;
+                    window.dispatchEvent(new CustomEvent('mwi_buildscore_updated', {
+                        detail: { buildScore: DataStore.buildScore }
+                    }));
+                    self._debouncedSaveSimData();
+                } catch (e) {}
+            }, 500);
         },
         getNameFromDOM() {
             const selectors = [

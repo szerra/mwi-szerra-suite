@@ -232,7 +232,7 @@ PACKS = (
         "MWI-Szerra-Character-Suite.user.js",
         "MWI Szerra 角色資訊包",
         "整合 Talent Market、裝備同步、角色名片與技能需求提示；可從 Tampermonkey 選單逐項開關。",
-        "1.0.0",
+        "1.0.1",
         "CC-BY-NC-SA-4.0",
         (
             "// @match        https://www.milkywayidle.com/*",
