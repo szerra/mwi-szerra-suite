@@ -62,7 +62,7 @@ COMBAT_MODULES = (
         "[银河奶牛]显示战斗升级所需时间.user.js",
         "https://greasyfork.org/scripts/556360",
         "DOUBAO-DiamondMoo",
-        "1.4",
+        "1.5.0-szerra.1",
         "MIT",
     ),
     Module(
@@ -174,7 +174,7 @@ PACKS = (
         "MWI-Szerra-Combat-Suite.user.js",
         "MWI Szerra 戰鬥資訊包",
         "整合戰鬥 HUD、升級時間、模擬器匯入、掉落統計與戰鬥特效；可從 Tampermonkey 選單逐項開關。",
-        "1.0.18",
+        "1.0.19",
         "CC-BY-NC-SA-4.0",
         (
             "// @match        https://www.milkywayidle.com/*",

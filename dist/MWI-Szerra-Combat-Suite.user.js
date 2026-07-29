@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Szerra 戰鬥資訊包
 // @namespace    https://github.com/szerra/mwi-szerra-suite
-// @version      1.0.18
+// @version      1.0.19
 // @description  整合戰鬥 HUD、升級時間、模擬器匯入、掉落統計與戰鬥特效；可從 Tampermonkey 選單逐項開關。
 // @author       Szerra integration; see THIRD_PARTY_NOTICES.md
 // @license      CC-BY-NC-SA-4.0
@@ -4455,7 +4455,7 @@
 
   // ---------------------------------------------------------------------------
   // Module: 戰鬥升級所需時間
-  // Original: [银河奶牛]显示战斗升级所需时间.user.js v1.4
+  // Original: [银河奶牛]显示战斗升级所需时间.user.js v1.5.0-szerra.1
   // Author: DOUBAO-DiamondMoo
   // License: MIT
   // Source: https://greasyfork.org/scripts/556360
@@ -4464,6 +4464,11 @@
   __MWISzerraSuite.run("level-time", "戰鬥升級所需時間", "idle", () => {
     (function() {
         'use strict';
+    
+        const TARGET_CONTROL_ID = 'mwi-szerra-level-target-control';
+        const TARGET_INPUT_ID = 'mwi-szerra-level-target-input';
+        const TARGET_STORAGE_KEY = 'mwi.szerra.level-time.target.v1';
+        const DEFAULT_TARGET_LEVEL = 140;
     
         // 技能中英对照表
         const SKILL_MAP = {
@@ -4476,13 +4481,174 @@
             "/skills/magic": "魔法"
         };
     
-        // 反向技能映射（通过技能名称找key）
-        const REVERSE_SKILL_MAP = Object.fromEntries(
-            Object.entries(SKILL_MAP).map(([key, value]) => [value, key])
-        );
+        // 同時支援簡體、繁體技能名稱
+        const REVERSE_SKILL_MAP = {
+            "耐力": "/skills/stamina",
+            "智力": "/skills/intelligence",
+            "攻击": "/skills/attack",
+            "攻擊": "/skills/attack",
+            "防御": "/skills/defense",
+            "防禦": "/skills/defense",
+            "近战": "/skills/melee",
+            "近戰": "/skills/melee",
+            "远程": "/skills/ranged",
+            "遠程": "/skills/ranged",
+            "魔法": "/skills/magic"
+        };
     
         // 已处理的提示框列表，避免重复处理
-        const processedTooltips = new Set();
+        const processedTooltips = new WeakSet();
+        let cachedLevelExperienceTable = null;
+    
+        function getSavedTargetLevel() {
+            try {
+                const value = Number(
+                    typeof GM_getValue === 'function'
+                        ? GM_getValue(TARGET_STORAGE_KEY, DEFAULT_TARGET_LEVEL)
+                        : DEFAULT_TARGET_LEVEL
+                );
+                return Number.isInteger(value) && value > 0
+                    ? value
+                    : DEFAULT_TARGET_LEVEL;
+            } catch (_error) {
+                return DEFAULT_TARGET_LEVEL;
+            }
+        }
+    
+        function saveTargetLevel(value) {
+            try {
+                if (typeof GM_setValue === 'function') {
+                    GM_setValue(TARGET_STORAGE_KEY, value);
+                }
+            } catch (_error) {
+                // 儲存失敗時仍可使用本次輸入。
+            }
+        }
+    
+        function getLevelExperienceTable() {
+            if (cachedLevelExperienceTable) return cachedLevelExperienceTable;
+            try {
+                const raw = localStorage.getItem('initClientData');
+                if (!raw) return null;
+    
+                let initData = null;
+                try {
+                    initData = JSON.parse(raw);
+                } catch (_plainJsonError) {
+                    const decompressor = typeof LZString !== 'undefined'
+                        ? LZString
+                        : null;
+                    const decompressed = decompressor?.decompressFromUTF16(raw);
+                    if (decompressed) initData = JSON.parse(decompressed);
+                }
+    
+                const table = initData?.levelExperienceTable;
+                if (!table || typeof table !== 'object') return null;
+                cachedLevelExperienceTable = table;
+                return cachedLevelExperienceTable;
+            } catch (error) {
+                console.log('[升級時間腳本] 讀取官方經驗表失敗:', error);
+                return null;
+            }
+        }
+    
+        function currentTargetLevel() {
+            const input = document.getElementById(TARGET_INPUT_ID);
+            const value = Number(input?.value ?? getSavedTargetLevel());
+            return Number.isInteger(value) ? value : DEFAULT_TARGET_LEVEL;
+        }
+    
+        function refreshVisibleTooltips() {
+            document
+                .querySelectorAll('.NavigationBar_navigationSkillTooltip__3a9Rz')
+                .forEach((tooltip) => {
+                    processedTooltips.delete(tooltip);
+                    handleSkillTooltip(tooltip);
+                });
+        }
+    
+        function ensureTargetLevelControl() {
+            if (document.getElementById(TARGET_CONTROL_ID)) return;
+            const combatLabel = Array.from(
+                document.querySelectorAll('.NavigationBar_label__1uH-y')
+            ).find((element) => (
+                ['戰鬥', '战斗', 'Combat'].includes(element.textContent?.trim())
+            ));
+            const combatLink = combatLabel?.closest(
+                '.NavigationBar_navigationLink__3eAHA'
+            );
+            const combatHeader = combatLabel?.closest('.NavigationBar_nav__3uuUl');
+            if (!combatLink || !combatHeader) return;
+    
+            const control = document.createElement('div');
+            control.id = TARGET_CONTROL_ID;
+            control.style.cssText = [
+                'display:flex',
+                'align-items:center',
+                'gap:5px',
+                'padding:4px 10px 5px 37px',
+                'color:#dbe4ff',
+                'font-size:12px',
+                'line-height:1'
+            ].join(';');
+    
+            const label = document.createElement('label');
+            label.htmlFor = TARGET_INPUT_ID;
+            label.textContent = '目標';
+    
+            const input = document.createElement('input');
+            input.id = TARGET_INPUT_ID;
+            input.type = 'number';
+            input.min = '1';
+            input.max = '200';
+            input.step = '1';
+            input.value = String(getSavedTargetLevel());
+            input.title = '輸入想升到的戰鬥技能等級';
+            input.setAttribute('aria-label', '戰鬥技能目標等級');
+            input.style.cssText = [
+                'width:54px',
+                'height:23px',
+                'padding:1px 4px',
+                'border:1px solid #7183bd',
+                'border-radius:3px',
+                'background:#161b2d',
+                'color:#fff',
+                'font:600 12px/1 sans-serif'
+            ].join(';');
+    
+            const suffix = document.createElement('span');
+            suffix.textContent = '級';
+    
+            const updateTarget = () => {
+                const target = Number(input.value);
+                if (!Number.isInteger(target) || target < 1 || target > 200) {
+                    input.setCustomValidity('請輸入 1～200 的整數等級');
+                    return;
+                }
+                input.setCustomValidity('');
+                saveTargetLevel(target);
+                refreshVisibleTooltips();
+            };
+            input.addEventListener('input', updateTarget);
+            input.addEventListener('change', updateTarget);
+            input.addEventListener('click', (event) => event.stopPropagation());
+            input.addEventListener('keydown', (event) => event.stopPropagation());
+    
+            control.append(label, input, suffix);
+            combatHeader.insertAdjacentElement('afterend', control);
+        }
+    
+        function parseTooltipNumber(tooltipEl, patterns) {
+            const lines = String(tooltipEl.innerText || '')
+                .split(/\r?\n/)
+                .map((line) => line.trim());
+            const line = lines.find((text) => (
+                patterns.some((pattern) => pattern.test(text))
+            ));
+            if (!line) return null;
+            const value = Number(line.replace(/[^0-9.-]/g, ''));
+            return Number.isFinite(value) ? value : null;
+        }
     
         // 获取游戏核心状态
         function getGameState() {
@@ -4540,6 +4706,55 @@
             return parts.join(' ');
         }
     
+        function calculateTargetProgress(
+            levelExperienceTable,
+            currentLevel,
+            needExp,
+            targetLevel,
+            expPerHour
+        ) {
+            if (targetLevel <= currentLevel) {
+                return { status: 'reached' };
+            }
+            const maxTargetLevel = levelExperienceTable
+                ? Object.keys(levelExperienceTable)
+                    .map(Number)
+                    .filter(Number.isFinite)
+                    .reduce((maximum, level) => Math.max(maximum, level), 0)
+                : 0;
+            if (
+                !levelExperienceTable
+                || targetLevel > maxTargetLevel
+                || !Number.isFinite(Number(levelExperienceTable[currentLevel + 1]))
+                || !Number.isFinite(Number(levelExperienceTable[targetLevel]))
+                || !Number.isFinite(expPerHour)
+                || expPerHour <= 0
+            ) {
+                return { status: 'unavailable' };
+            }
+    
+            const currentLevelStartExp = Number(
+                levelExperienceTable[currentLevel]
+            ) || 0;
+            const nextLevelTotalExp = Number(
+                levelExperienceTable[currentLevel + 1]
+            );
+            const currentSkillExp = Math.max(
+                currentLevelStartExp,
+                nextLevelTotalExp - needExp
+            );
+            const targetTotalExp = Number(levelExperienceTable[targetLevel]);
+            const targetNeedExp = Math.max(
+                0,
+                Math.ceil(targetTotalExp - currentSkillExp)
+            );
+            return {
+                status: 'ready',
+                targetNeedExp,
+                targetSeconds: Math.ceil(targetNeedExp / expPerHour * 3600)
+            };
+        }
+    
         // 处理技能提示框
         function handleSkillTooltip(tooltipEl) {
             try {
@@ -4565,6 +4780,7 @@
                 let playerIndex = battlePlayers.findIndex(
                     p => p.character?.id === playerId
                 );
+                if (playerIndex < 0) return;
     
     
                 // 3. 获取当前提示框的技能名称
@@ -4574,19 +4790,26 @@
                     return;
                 }
     
-                // 4. 获取该技能的总经验和升级所需经验
+                // 4. 获取该技能的本次战斗经验、当前等级和升级所需经验
                 const playerData = battlePlayers[playerIndex];
                 const totalExpMap = playerData.totalSkillExperienceMap;
                 const skillKey = REVERSE_SKILL_MAP[skillName];
                 const totalExp = totalExpMap?.[skillKey] || 0;
     
-                // 获取升级所需经验
-                const needExpEl = tooltipEl.querySelector('div:nth-child(4)');
-                const needExp = needExpEl
-                    ? parseFloat(needExpEl.textContent.replace(/[^0-9.-]/g, ''))
-                    : 0;
+                const currentLevel = parseTooltipNumber(
+                    tooltipEl,
+                    [/^等級\s*:/, /^等级\s*:/, /^Level\s*:/i]
+                );
+                const needExp = parseTooltipNumber(
+                    tooltipEl,
+                    [/^升級所需經驗\s*:/, /^升级所需经验\s*:/, /^Experience required\s*:/i]
+                );
     
-                if (totalExp <= 0 || needExp <= 0) {
+                if (
+                    totalExp <= 0
+                    || needExp <= 0
+                    || !Number.isInteger(currentLevel)
+                ) {
                     return;
                 }
     
@@ -4597,7 +4820,7 @@
                     return;
                 }
     
-                // 6. 计算升级剩余时间并创建元素
+                // 6. 计算下一级剩余时间
                 const remainingSec = Math.ceil(needExp / expPerHour * 3600);
                 const remainingTimeStr = formatSeconds(remainingSec);
     
@@ -4623,18 +4846,49 @@
                 }
     
                 const upgradeTimeStr = formatUpgradeTime(remainingSec);
+                const targetLevel = currentTargetLevel();
+                const levelExperienceTable = getLevelExperienceTable();
+                const targetProgress = calculateTargetProgress(
+                    levelExperienceTable,
+                    currentLevel,
+                    needExp,
+                    targetLevel,
+                    expPerHour
+                );
+    
+                let targetHtml = '';
+                if (targetProgress.status === 'reached') {
+                    targetHtml = [
+                        `<span style="color:#ffd27a">目標 ${targetLevel} 級已達成</span>`,
+                        `<span style="color:#c8d2f0">請輸入高於 ${currentLevel} 的等級</span>`
+                    ].join('<br>');
+                } else if (targetProgress.status !== 'ready') {
+                    targetHtml = '<span style="color:#ffb4b4">官方經驗表尚未就緒，請重新整理頁面</span>';
+                } else {
+                    targetHtml = [
+                        `目標等級：<b style="color:#ffd27a">${targetLevel}</b>`,
+                        `尚需經驗：${targetProgress.targetNeedExp.toLocaleString()}`,
+                        `預估時間：<b>${formatSeconds(targetProgress.targetSeconds)}</b>`,
+                        `預計達成：${formatUpgradeTime(targetProgress.targetSeconds)}`
+                    ].join('<br>');
+                }
     
                 // 8. 插入或更新升级时间元素（避免重复）
                 let timeEl = tooltipEl.querySelector('.upgrade-time-display');
                 if (!timeEl) {
                     timeEl = document.createElement('div');
                     timeEl.className = 'upgrade-time-display';
-                    timeEl.style.cssText = 'line-height: 1.4;';
+                    timeEl.style.cssText = 'line-height:1.4;margin-top:3px;white-space:nowrap;';
                     // 插入到升级所需经验之后、说明信息之前
                     const infoEl = tooltipEl.querySelector('.NavigationBar_info__3zahT');
                     tooltipEl.insertBefore(timeEl, infoEl);
                 }
-                timeEl.innerHTML = `升级所需时间:  ${remainingTimeStr}<br>升级具体时间: ${upgradeTimeStr}`;
+                timeEl.innerHTML = [
+                    `升到 ${currentLevel + 1}：${remainingTimeStr}`,
+                    `預計：${upgradeTimeStr}`,
+                    '<span style="display:block;border-top:1px solid rgba(255,255,255,.35);margin:3px 0"></span>',
+                    targetHtml
+                ].join('<br>');
     
             } catch (error) {
                 console.log(`[升级时间脚本] 处理技能提示框出错:`, error);
@@ -4643,6 +4897,8 @@
     
         // 初始化脚本
         function initScript() {
+            ensureTargetLevelControl();
+    
             // 使用MutationObserver监听DOM变化
             const observer = new MutationObserver((mutations) => {
                 mutations.forEach(mutation => {
@@ -4678,6 +4934,7 @@
                         }
                     }
                 });
+                ensureTargetLevelControl();
             });
     
             // 监听整个文档的变化
