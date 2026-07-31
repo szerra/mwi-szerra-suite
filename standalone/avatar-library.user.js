@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI 自訂角色圖庫
 // @namespace    https://github.com/szerra/mwi-szerra-suite
-// @version      0.1.6
+// @version      0.1.7
 // @description  儲存多張角色圖片，並讓自己與最多四名隊友分別自由換圖。
 // @author       Szerra local build
 // @license      MIT
@@ -61,24 +61,6 @@
   let modalOpen = false;
 
   GM_addStyle(`
-    /* Enlarge the complete combat cards while preserving the game's auto-fit
-       layout for parties and monster groups from one to five units. */
-    [class*="BattlePanel_playersArea"] [class*="BattlePanel_combatUnitGrid"],
-    [class*="BattlePanel_monstersArea"] [class*="BattlePanel_combatUnitGrid"] {
-      grid-template-columns: repeat(auto-fit, 9.5rem) !important;
-      align-content: end !important;
-      box-sizing: border-box !important;
-      padding-bottom: 2.25rem !important;
-    }
-
-    [class*="BattlePanel_playersArea"] [class*="BattlePanel_combatUnitGrid"] > [class*="CombatUnit_combatUnit"],
-    [class*="BattlePanel_monstersArea"] [class*="BattlePanel_combatUnitGrid"] > [class*="CombatUnit_combatUnit"] {
-      width: 7.5rem !important;
-      justify-self: center;
-      transform: scale(1.28);
-      transform-origin: center center;
-    }
-
     .mwi-avatar-original-hidden {
       visibility: hidden !important;
     }
