@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MWI 自訂角色圖庫
 // @namespace    https://github.com/szerra/mwi-szerra-suite
-// @version      0.1.7
-// @description  儲存多張角色圖片，並讓自己與最多四名隊友分別自由換圖。
+// @version      0.1.8
+// @description  自訂角色圖庫相容版；新版 MWITools 存在時自動移交資料並停用重複介面。
 // @author       Szerra local build
 // @license      MIT
 // @homepageURL  https://github.com/szerra/mwi-szerra-suite
@@ -30,6 +30,9 @@
   const DB_VERSION = 1;
   const IMAGE_STORE = 'images';
   const ASSIGNMENTS_KEY = 'mwiAvatarLibraryAssignmentsV1';
+  const PANEL_POSITION_KEY = 'mwiAvatarLibraryPanelPositionV1';
+  const MIGRATION_STORAGE_KEY = 'mwiAvatarLibraryAssignmentsMigrationV1';
+  const INTEGRATED_IN_MWITOOLS = false;
   const MAX_PARTY_SIZE = 5;
   const IMPORT_SIZE = 512;
   const IMPORT_QUALITY = 0.86;
@@ -59,6 +62,10 @@
   let assignments = normalizeAssignments(GM_getValue(ASSIGNMENTS_KEY, {}));
   let refreshQueued = false;
   let modalOpen = false;
+
+  if (INTEGRATED_IN_MWITOOLS) {
+    document.documentElement.dataset.mwiToolsAvatarLibrary = 'true';
+  }
 
   GM_addStyle(`
     .mwi-avatar-original-hidden {
@@ -118,6 +125,10 @@
     }
 
     #mwi-avatar-library-panel {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
       width: min(940px, calc(100vw - 28px));
       max-height: min(88vh, 900px);
       overflow: auto;
@@ -138,6 +149,9 @@
       padding: 14px 16px;
       border-bottom: 1px solid #39445f;
       background: rgba(29, 34, 50, .97);
+      cursor: move;
+      touch-action: none;
+      user-select: none;
     }
 
     .mwi-avatar-library-header h2 {
@@ -351,6 +365,35 @@
 
   function saveAssignments() {
     GM_setValue(ASSIGNMENTS_KEY, assignments);
+    if (!INTEGRATED_IN_MWITOOLS) publishAssignmentsForMigration();
+  }
+
+  function publishAssignmentsForMigration() {
+    if (!Object.keys(assignments).length) return;
+    try {
+      localStorage.setItem(MIGRATION_STORAGE_KEY, JSON.stringify({
+        version: 1,
+        assignments,
+        updatedAt: Date.now(),
+      }));
+    } catch (error) {
+      console.warn(`[${SCRIPT_ID}] 無法準備舊圖庫指派移交`, error);
+    }
+  }
+
+  function importMigratedAssignments() {
+    if (!INTEGRATED_IN_MWITOOLS || Object.keys(assignments).length) return false;
+    try {
+      const migration = JSON.parse(localStorage.getItem(MIGRATION_STORAGE_KEY) || 'null');
+      const migratedAssignments = normalizeAssignments(migration?.assignments);
+      if (!Object.keys(migratedAssignments).length) return false;
+      assignments = migratedAssignments;
+      saveAssignments();
+      return true;
+    } catch (error) {
+      console.warn(`[${SCRIPT_ID}] 無法接收舊圖庫指派`, error);
+      return false;
+    }
   }
 
   function openDatabase() {
@@ -643,6 +686,89 @@
     status.style.color = isError ? '#ff9b9b' : '#7ee3b1';
   }
 
+  function clampPanelPosition(panel, left, top) {
+    const margin = 8;
+    const maxLeft = Math.max(margin, window.innerWidth - panel.offsetWidth - margin);
+    const maxTop = Math.max(margin, window.innerHeight - panel.offsetHeight - margin);
+    return {
+      left: Math.min(maxLeft, Math.max(margin, Number(left) || margin)),
+      top: Math.min(maxTop, Math.max(margin, Number(top) || margin)),
+    };
+  }
+
+  function placePanel(panel, left, top) {
+    const position = clampPanelPosition(panel, left, top);
+    panel.style.left = `${position.left}px`;
+    panel.style.top = `${position.top}px`;
+    panel.style.transform = 'none';
+    return position;
+  }
+
+  function restorePanelPosition(panel) {
+    const saved = GM_getValue(PANEL_POSITION_KEY, null);
+    if (!saved || !Number.isFinite(Number(saved.left)) || !Number.isFinite(Number(saved.top))) return;
+    window.requestAnimationFrame(() => placePanel(panel, saved.left, saved.top));
+  }
+
+  function makePanelDraggable(panel, header) {
+    let dragState = null;
+
+    const onPointerMove = (event) => {
+      if (!dragState || event.pointerId !== dragState.pointerId) return;
+      placePanel(
+        panel,
+        event.clientX - dragState.offsetX,
+        event.clientY - dragState.offsetY
+      );
+      event.preventDefault();
+    };
+
+    const finishDrag = (event) => {
+      if (!dragState || event.pointerId !== dragState.pointerId) return;
+      const rect = panel.getBoundingClientRect();
+      const position = placePanel(panel, rect.left, rect.top);
+      GM_setValue(PANEL_POSITION_KEY, position);
+      dragState = null;
+    };
+
+    const onPointerDown = (event) => {
+      if (event.button !== 0 || event.target.closest('button, input, select, a, label')) return;
+      const rect = panel.getBoundingClientRect();
+      placePanel(panel, rect.left, rect.top);
+      dragState = {
+        pointerId: event.pointerId,
+        offsetX: event.clientX - rect.left,
+        offsetY: event.clientY - rect.top,
+      };
+      try {
+        header.setPointerCapture(event.pointerId);
+      } catch {
+        // Window-level listeners below still keep the drag active.
+      }
+      event.preventDefault();
+    };
+
+    const onResize = () => {
+      if (panel.style.transform !== 'none') return;
+      const rect = panel.getBoundingClientRect();
+      placePanel(panel, rect.left, rect.top);
+    };
+
+    header.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointermove', onPointerMove, { passive: false });
+    window.addEventListener('pointerup', finishDrag);
+    window.addEventListener('pointercancel', finishDrag);
+    window.addEventListener('resize', onResize);
+
+    return () => {
+      header.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', finishDrag);
+      window.removeEventListener('pointercancel', finishDrag);
+      window.removeEventListener('resize', onResize);
+    };
+  }
+
   async function renderTeamRows(container, images) {
     container.replaceChildren();
     const players = findPlayerUnits();
@@ -851,6 +977,7 @@
 
     const panel = document.createElement('section');
     panel.id = 'mwi-avatar-library-panel';
+    panel.dataset.avatarLibrarySource = INTEGRATED_IN_MWITOOLS ? 'mwitools' : 'standalone';
 
     const header = document.createElement('div');
     header.className = 'mwi-avatar-library-header';
@@ -908,9 +1035,12 @@
     panel.append(header, body);
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
+    restorePanelPosition(panel);
+    const destroyPanelDrag = makePanelDraggable(panel, header);
 
     const closeModal = () => {
       modalOpen = false;
+      destroyPanelDrag();
       overlay.remove();
     };
     close.addEventListener('click', closeModal);
@@ -968,6 +1098,7 @@
     if (document.querySelector('#mwi-avatar-library-launcher')) return;
     const launcher = document.createElement('button');
     launcher.id = 'mwi-avatar-library-launcher';
+    launcher.dataset.avatarLibrarySource = INTEGRATED_IN_MWITOOLS ? 'mwitools' : 'standalone';
     launcher.type = 'button';
     launcher.textContent = '🎭';
     launcher.title = '開啟 MWI 自訂角色圖庫';
@@ -992,7 +1123,25 @@
     });
   }
 
-  initialize().catch((error) => {
-    console.error(`[${SCRIPT_ID}] 初始化失敗`, error);
-  });
+  const startAvatarLibrary = () => {
+    if (INTEGRATED_IN_MWITOOLS) {
+      importMigratedAssignments();
+      window.setTimeout(async () => {
+        if (importMigratedAssignments()) await applyAllAvatars();
+      }, 1200);
+    }
+    initialize().catch((error) => {
+      console.error(`[${SCRIPT_ID}] 初始化失敗`, error);
+    });
+  };
+
+  if (INTEGRATED_IN_MWITOOLS) {
+    startAvatarLibrary();
+  } else {
+    publishAssignmentsForMigration();
+    window.setTimeout(() => {
+      if (document.documentElement.dataset.mwiToolsAvatarLibrary === 'true') return;
+      startAvatarLibrary();
+    }, 800);
+  }
 })();
