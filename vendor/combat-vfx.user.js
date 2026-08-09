@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI 戰鬥技能特效
 // @namespace    codex.local.mwi.combat-vfx
-// @version      0.1.25
+// @version      0.1.26
 // @description  攻擊讀條時在手前方顯示法陣，彈道同步命中，並把怪物狀態與全隊光環依實際持續時間附著在角色上。
 // @author       Local build for gzerr
 // @license      MIT
@@ -18,7 +18,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.1.25";
+  const VERSION = "0.1.26";
   const CANVAS_ID = "mwiCombatVfxCanvas0118";
   const MONSTER_UNIT_CLASS = "mwiCombatVfxMonsterUnit";
   const ORIGINAL_SPLAT_STYLE_ID = "mwiCombatVfxOriginalMonsterSplatStyle";
@@ -88,6 +88,14 @@
     teal: [55, 225, 194],
     enemy: [255, 68, 80]
   };
+  // 固定依隊伍中的角色順序著色，避免同一位角色改放不同技能時傷害數字跟著換色。
+  const PLAYER_DAMAGE_COLORS = Object.freeze([
+    [61, 200, 255],
+    [255, 190, 54],
+    [83, 226, 126],
+    [190, 105, 255],
+    [255, 105, 154]
+  ]);
 
   const PROFILES = {
     autoAttack: { style: "weapon", color: COLORS.white, duration: 720 },
@@ -242,6 +250,7 @@
   let attachedAuras = new Map();
   let pageHidden = document.hidden;
   let effectsEnabled = localStorage.getItem(VFX_TOGGLE_KEY) !== "false";
+  let guildTrialBattle = false;
 
   let monsterHp = [];
   let monsterMp = [];
@@ -893,9 +902,12 @@
         : rgba([26, 42, 54], alpha * 0.86);
       const y = target.point.y - 29 - easeOut(local) * 19;
       ctx.strokeText(label, target.point.x, y);
+      const playerColor = Number.isInteger(effect.playerIndex)
+        ? PLAYER_DAMAGE_COLORS[effect.playerIndex]
+        : null;
       ctx.fillStyle = target.miss
         ? rgba([207, 221, 239], alpha)
-        : rgba(target.crit || (effect.targets.length === 1 && effect.isCrit) ? [255, 221, 78] : effect.profile.color, alpha);
+        : rgba(playerColor || effect.profile.color, alpha);
       ctx.fillText(label, target.point.x, y);
       ctx.restore();
     }
@@ -3298,30 +3310,32 @@
   function drawEffect(effect, now) {
     const p = clamp((now - effect.startedAt) / effect.duration);
     const style = effect.profile.style;
-    ctx.save();
-    if (effect.kind === "cast") {
-      drawCastingEffect(effect, p);
-    } else if (effect.kind === "directHeal") {
-      drawDirectHeal(effect, p);
-    } else if (effect.kind === "bloomHeal") {
-      drawBloomHeal(effect, p);
-    } else if (effect.kind === "rippleProc") {
-      drawRippleProc(effect, p);
-    } else if (effect.kind === "blazeProc") {
-      drawBlazeProc(effect, p);
-    } else if (effect.enemy) {
-      drawEnemyAttack(effect, p);
-    } else {
-      const route = STYLE_ROUTES[style];
-      if (route === "weapon") drawWeapon(effect, p);
-      else if (route === "thrust") drawThrust(effect, p, style);
-      else if (route === "slash") drawSlash(effect, p, style);
-      else if (route === "blunt") drawBlunt(effect, p, style);
-      else if (route === "arrow") drawArrow(effect, p, style);
-      else if (route === "magic") drawMagicProjectile(effect, p, style);
+    if (!effect.numbersOnly) {
+      ctx.save();
+      if (effect.kind === "cast") {
+        drawCastingEffect(effect, p);
+      } else if (effect.kind === "directHeal") {
+        drawDirectHeal(effect, p);
+      } else if (effect.kind === "bloomHeal") {
+        drawBloomHeal(effect, p);
+      } else if (effect.kind === "rippleProc") {
+        drawRippleProc(effect, p);
+      } else if (effect.kind === "blazeProc") {
+        drawBlazeProc(effect, p);
+      } else if (effect.enemy) {
+        drawEnemyAttack(effect, p);
+      } else {
+        const route = STYLE_ROUTES[style];
+        if (route === "weapon") drawWeapon(effect, p);
+        else if (route === "thrust") drawThrust(effect, p, style);
+        else if (route === "slash") drawSlash(effect, p, style);
+        else if (route === "blunt") drawBlunt(effect, p, style);
+        else if (route === "arrow") drawArrow(effect, p, style);
+        else if (route === "magic") drawMagicProjectile(effect, p, style);
+      }
+      if (!effect.kind && !effect.enemy && effect.isCrit) drawCriticalImpact(effect, p);
+      ctx.restore();
     }
-    if (!effect.kind && !effect.enemy && effect.isCrit) drawCriticalImpact(effect, p);
-    ctx.restore();
     if (!effect.kind) drawDamage(effect, p);
     return p < 1;
   }
@@ -3335,8 +3349,8 @@
     }
     resizeCanvas();
     ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-    const auraCount = drawAttachedAuras(now);
-    const statusCount = drawAttachedStatuses(now);
+    const auraCount = guildTrialBattle ? 0 : drawAttachedAuras(now);
+    const statusCount = guildTrialBattle ? 0 : drawAttachedStatuses(now);
     activeEffects = activeEffects.filter(effect => drawEffect(effect, now));
     if (activeEffects.length || statusCount || auraCount) animationFrame = requestAnimationFrame(render);
   }
@@ -3394,7 +3408,7 @@
 
   function spawnCastEffect(playerIndex, abilityHrid, intervalValue) {
     const profile = getCastProfile(abilityHrid);
-    if (!effectsEnabled || pageHidden || !profile) return;
+    if (!effectsEnabled || pageHidden || guildTrialBattle || !profile) return;
     const auraSpec = AURA_SPECS[abilityHrid];
     const { players, monsters } = findCombatUnits();
     const player = players[playerIndex];
@@ -3479,6 +3493,7 @@
     if (!player || !monsters.length) return;
 
     const validHits = hits
+      .filter(hit => !guildTrialBattle || hit.damage > 0)
       .filter(hit => monsters[hit.index])
       .map(hit => ({ ...hit, element: monsters[hit.index] }))
       .sort((a, b) => a.index - b.index);
@@ -3519,6 +3534,7 @@
     activeEffects.push({
       id: ++effectSequence,
       seed: effectSequence * 97 + playerIndex * 19,
+      playerIndex,
       abilityHrid,
       profile,
       sourceAnchor,
@@ -3527,6 +3543,7 @@
       isCrit,
       continuedFromCast: Number.isFinite(handoffProgress) && handoffProgress > 0,
       enemy: false,
+      numbersOnly: guildTrialBattle,
       duration: profile.duration,
       startedAt: syncedAttackStartedAt(profile, targets.every(target => target.miss), handoffProgress)
     });
@@ -3557,6 +3574,7 @@
       targets,
       isCrit,
       enemy: true,
+      numbersOnly: guildTrialBattle,
       duration: 760,
       startedAt: syncedAttackStartedAt(profile, false)
     });
@@ -3564,7 +3582,7 @@
   }
 
   function spawnDirectHeal(casterIndex, abilityHrid) {
-    if (!effectsEnabled) return;
+    if (!effectsEnabled || guildTrialBattle) return;
     if (pageHidden) return;
     const profile = HEAL_PROFILES[abilityHrid];
     if (!profile) return;
@@ -3601,7 +3619,7 @@
   }
 
   function spawnRippleProc(casterIndex, rippleChance) {
-    if (!effectsEnabled) return;
+    if (!effectsEnabled || guildTrialBattle) return;
     if (pageHidden) return;
     const { players } = findCombatUnits();
     const caster = players[casterIndex];
@@ -3628,7 +3646,7 @@
   }
 
   function spawnBlazeProc(casterIndex, targetIndices, blazeChance) {
-    if (!effectsEnabled) return;
+    if (!effectsEnabled || guildTrialBattle) return;
     if (pageHidden || !targetIndices.length) return;
     const { players, monsters } = findCombatUnits();
     const caster = players[casterIndex];
@@ -3671,7 +3689,7 @@
   }
 
   function spawnBloomHeal(casterIndex, targetIndex, healing, bloomChance) {
-    if (!effectsEnabled) return;
+    if (!effectsEnabled || guildTrialBattle) return;
     if (pageHidden || !(healing > 0)) return;
     const { players } = findCombatUnits();
     const caster = players[casterIndex];
@@ -3781,6 +3799,7 @@
   }
 
   function syncExactPlayerAuras(playerIndex, buffMap) {
+    if (guildTrialBattle) return;
     if (!buffMap || typeof buffMap !== "object") return;
     const prefix = `exact:aura:${playerIndex}:`;
     const seen = new Set();
@@ -3822,6 +3841,7 @@
   }
 
   function applyInferredAura(casterIndex, abilityHrid) {
+    if (guildTrialBattle) return;
     const spec = AURA_SPECS[abilityHrid];
     if (!spec) return;
     const wallNow = Date.now();
@@ -3857,6 +3877,7 @@
   }
 
   function syncExactMonsterStatuses(monsterIndex, buffMap) {
+    if (guildTrialBattle) return;
     if (!buffMap || typeof buffMap !== "object") return;
     const prefix = `exact:${monsterIndex}:`;
     const seen = new Set();
@@ -3898,6 +3919,7 @@
   }
 
   function applyInferredStatuses(abilityHrid, hits) {
+    if (guildTrialBattle) return;
     const specs = INFERRED_STATUS_SPECS[abilityHrid];
     if (!specs || !hits?.length) return;
     const wallNow = Date.now();
@@ -4001,6 +4023,34 @@
     }, 80);
   }
 
+  function initialCombatValue(unit, key) {
+    return unit?.[key] ?? unit?.combatDetails?.[key];
+  }
+
+  function isGuildTrialStart(message) {
+    if (!Array.isArray(message?.monsters)) return false;
+    return message.monsters.some(monster => {
+      const hrids = [
+        monster?.hrid,
+        monster?.monsterHrid,
+        monster?.combatMonsterHrid,
+        monster?.combatDetails?.hrid,
+        monster?.combatDetails?.monsterHrid,
+        monster?.combatDetails?.combatMonsterHrid
+      ];
+      if (hrids.some(hrid => typeof hrid === "string" && hrid.startsWith("/monsters/trial_"))) {
+        return true;
+      }
+      // Guild battle start payloads have changed nesting between server versions.
+      // This start-only fallback keeps the detection tied to the official trial HRID.
+      try {
+        return JSON.stringify(monster).includes("/monsters/trial_");
+      } catch (_) {
+        return false;
+      }
+    });
+  }
+
   function handleBattleMessage(payload) {
     if (typeof payload !== "string" || payload.charCodeAt(0) !== 123) return;
     let obj;
@@ -4011,20 +4061,22 @@
     }
     if (!obj || typeof obj !== "object") return;
 
-    if (obj.type === "new_battle" && Array.isArray(obj.monsters) && Array.isArray(obj.players)) {
+    const isBattleStart = ["new_battle", "new_guild_battle", "guild_battle_new"].includes(obj.type);
+    if (isBattleStart && Array.isArray(obj.monsters) && Array.isArray(obj.players)) {
       battleGeneration++;
       clearDamageHpTrails();
-      monsterHp = obj.monsters.map(monster => numberOr(monster.currentHitpoints, 0));
-      monsterMp = obj.monsters.map(monster => numberOr(monster.currentManapoints, 0));
-      monsterAtkCounter = obj.monsters.map(monster => numberOr(monster.attackAttemptCounter, 0));
-      monsterDmgCounter = obj.monsters.map(monster => numberOr(monster.damageSplatCounter, 0));
-      monsterCritCounter = obj.monsters.map(monster => numberOr(monster.criticalDamageSplatCounter, 0));
-      playerHp = obj.players.map(player => numberOr(player.currentHitpoints, 0));
-      playerMp = obj.players.map(player => numberOr(player.currentManapoints, 0));
-      playerAtkCounter = obj.players.map(player => numberOr(player.attackAttemptCounter, 0));
-      playerDmgCounter = obj.players.map(player => numberOr(player.damageSplatCounter, 0));
-      playerCritCounter = obj.players.map(player => numberOr(player.criticalDamageSplatCounter, 0));
-      playerPreparingAbility = obj.players.map(player => normalizePreparingAbility(player.preparingAbilityHrid));
+      guildTrialBattle = isGuildTrialStart(obj);
+      monsterHp = obj.monsters.map(monster => numberOr(initialCombatValue(monster, "currentHitpoints"), 0));
+      monsterMp = obj.monsters.map(monster => numberOr(initialCombatValue(monster, "currentManapoints"), 0));
+      monsterAtkCounter = obj.monsters.map(monster => numberOr(initialCombatValue(monster, "attackAttemptCounter"), 0));
+      monsterDmgCounter = obj.monsters.map(monster => numberOr(initialCombatValue(monster, "damageSplatCounter"), 0));
+      monsterCritCounter = obj.monsters.map(monster => numberOr(initialCombatValue(monster, "criticalDamageSplatCounter"), 0));
+      playerHp = obj.players.map(player => numberOr(initialCombatValue(player, "currentHitpoints"), 0));
+      playerMp = obj.players.map(player => numberOr(initialCombatValue(player, "currentManapoints"), 0));
+      playerAtkCounter = obj.players.map(player => numberOr(initialCombatValue(player, "attackAttemptCounter"), 0));
+      playerDmgCounter = obj.players.map(player => numberOr(initialCombatValue(player, "damageSplatCounter"), 0));
+      playerCritCounter = obj.players.map(player => numberOr(initialCombatValue(player, "criticalDamageSplatCounter"), 0));
+      playerPreparingAbility = obj.players.map(player => normalizePreparingAbility(initialCombatValue(player, "preparingAbilityHrid")));
       playerBloomChance = obj.players.map(player => numberOr(player?.combatDetails?.combatStats?.bloom, 0));
       playerRippleChance = obj.players.map(player => numberOr(player?.combatDetails?.combatStats?.ripple, 0));
       playerBlazeChance = obj.players.map(player => numberOr(player?.combatDetails?.combatStats?.blaze, 0));
@@ -4041,12 +4093,12 @@
         const buffMap = findCombatBuffMap(player);
         if (buffMap) syncExactPlayerAuras(index, buffMap);
       });
-      scheduleInitialCastEffects(obj.players);
+      if (!guildTrialBattle) scheduleInitialCastEffects(obj.players);
       if (attachedStatuses.size || attachedAuras.size) requestRender();
       return;
     }
 
-    if (obj.type !== "battle_updated") return;
+    if (!["battle_updated", "guild_battle_updated"].includes(obj.type)) return;
     const mMap = obj.mMap || {};
     const pMap = obj.pMap || {};
     const monsterEntries = Object.entries(mMap);
@@ -4156,7 +4208,7 @@
       if (damage > 0) {
         const crit = Number.isFinite(previousCrit) && Number.isFinite(currentCrit) && currentCrit > previousCrit;
         monsterHits.push({ index, damage, crit });
-        addDamageHpTrail(combatUnits.monsters[index], previousHp, currentHp);
+        if (!guildTrialBattle) addDamageHpTrail(combatUnits.monsters[index], previousHp, currentHp);
       }
       if (Number.isFinite(previousDmg) && Number.isFinite(currentDmg) && currentDmg > previousDmg) {
         monsterSplats.push({ index, count: currentDmg - previousDmg });
@@ -4253,7 +4305,7 @@
       if (damage > 0) {
         const crit = Number.isFinite(previousCrit) && Number.isFinite(currentCrit) && currentCrit > previousCrit;
         playerHits.push({ index, damage, crit });
-        addDamageHpTrail(combatUnits.players[index], previousHp, currentHp);
+        if (!guildTrialBattle) addDamageHpTrail(combatUnits.players[index], previousHp, currentHp);
       } else if (damage < 0) {
         playerHeals.push({ index, healing: -damage });
       }
