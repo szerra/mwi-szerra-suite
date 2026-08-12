@@ -1,17 +1,29 @@
-# MWI Szerra 插件整合包
+# MWI Szerra 插件與獨立戰鬥外觀包
 
-把常用的 MWI Tampermonkey 插件整理成三個可獨立更新的套件。公會管理、私人上傳設定與裝置資料完全不在此儲存庫中。
+目前建議使用原作者的各個插件，讓它們各自更新；本儲存庫只繼續維護無法由原作者版本取代的戰鬥技能特效與角色圖片更換。公會管理、私人上傳設定與裝置資料完全不在此儲存庫中。
 
 ## 安裝
 
-- [安裝戰鬥資訊包](https://raw.githubusercontent.com/szerra/mwi-szerra-suite/main/dist/MWI-Szerra-Combat-Suite.user.js)
-- [安裝市場工具包](https://raw.githubusercontent.com/szerra/mwi-szerra-suite/main/dist/MWI-Szerra-Market-Suite.user.js)
-- [安裝角色資訊包](https://raw.githubusercontent.com/szerra/mwi-szerra-suite/main/dist/MWI-Szerra-Character-Suite.user.js)
+- [安裝戰鬥外觀與角色圖庫](https://raw.githubusercontent.com/szerra/mwi-szerra-suite/main/standalone/MWI-Szerra-Combat-Appearance.user.js)
 - [安裝食用工具（隊伍順序修正版）](https://raw.githubusercontent.com/szerra/mwi-szerra-suite/main/dist/MWI-Edible-Tools-TW.user.js)
 
-Tampermonkey 會依各檔案的 `@updateURL` 自動檢查此儲存庫的最新版。每個套件的子功能也能從 Tampermonkey 的腳本選單逐項開關，切換後頁面會重新載入。
+Tampermonkey 會依各檔案的 `@updateURL` 自動檢查此儲存庫的最新版。舊的三個 Szerra 整合包仍保留供已安裝者使用，但不再列為建議架構。
 
-## 套件內容
+## 建議架構
+
+- 啟用「MWI 戰鬥外觀與角色圖庫」：只負責技能特效與自己／隊友的角色圖片。
+- 其他市場、角色資訊、戰鬥統計功能改裝原作者插件，避免每次作者更新都要重新打包整套。
+- 神龕模擬器改用模擬器儲存庫提供的獨立橋接器。
+- 公會資料插件保持原樣；本外觀包不會讀寫它的資料或設定。
+
+## 戰鬥外觀包內容
+
+- 現在使用的戰鬥技能特效，包括遊戲設定內的特效開關。
+- 可保存多張圖片，分別指定自己與最多四位隊友。
+- 沿用原「MWI 自訂角色圖庫」的腳本識別與 IndexedDB 圖片庫；安裝本包可保留原本的圖片資料與角色指派。
+- 不包含 DPS、HPS、市場、模擬器、公會資料或任何原作者工具功能。
+
+## 舊整合包（不再建議新裝）
 
 ### 戰鬥資訊包
 
@@ -39,21 +51,28 @@ Tampermonkey 會依各檔案的 `@updateURL` 自動檢查此儲存庫的最新�
 
 ### 外觀
 
-備份內唯一的純外觀插件是「娘化怪物換皮」，因此不另外建立外觀整合包，讓它維持獨立即可。戰鬥技能特效雖然有視覺效果，但會讀取實際戰鬥事件，因此歸在戰鬥資訊包。
+「娘化怪物換皮」仍維持獨立；新的戰鬥外觀包只更換玩家隊伍圖片，不會覆蓋怪物換皮。
 
 ### 食用工具獨立修正版
 
 保留原版 `Edible Tools／[银河奶牛]食用工具` 的全部功能，只修正多人戰鬥消耗品視窗的玩家順序。安裝後請停用原版 `Edible Tools`，避免同時出現兩組按鈕。
 
-## 安裝後要停用的舊腳本
+## 改用新架構後要停用
 
-先確認三個整合包正常，再停用以下舊腳本：
+先確認原作者插件與新的戰鬥外觀包正常，再停用：
+
+- `MWI Szerra 戰鬥資訊包`
+- `MWI Szerra 市場工具包`
+- `MWI Szerra 角色資訊包`
+- 舊的獨立 `MWI 戰鬥技能特效`（功能已在外觀包內）
+- 舊的獨立 `MWI 自訂角色圖庫`（安裝外觀包時應由同識別腳本接續更新）
+
+以下原作者腳本不再由新外觀包取代，是否啟用請依需求決定：
 
 - `[银河奶牛]显示战斗升级所需时间`
 - `[MWI] Realtime Import Of Battle Simulation`
 - `[银河奶牛]康康运气_修复`
 - `MWI Battle HUD`
-- `MWI 戰鬥技能特效`
 - `牛牛战斗Buff显示`
 - `MWI 市场伴侣`
 - `MWI Profit Panel`
@@ -68,7 +87,7 @@ Tampermonkey 會依各檔案的 `@updateURL` 自動檢查此儲存庫的最新�
 
 - 所有公會管理、公會上傳與公會明細插件
 - `mooket II`
-- `MWITools 繁體中文修正版`
+- 原作者的 `MWITools`
 - `MWI 食用工具（隊伍順序修正版）`
 - `Ranged Way Idle`
 - `Sunny's MWI 增强`
@@ -87,6 +106,7 @@ Tampermonkey 會依各檔案的 `@updateURL` 自動檢查此儲存庫的最新�
 
 ```powershell
 python .\tools\build_suites.py --import-from "C:\path\to\tampermonkey\scripts"
+node .\tools\build_standalone_appearance.mjs
 ```
 
 建置工具只匯入白名單中的 `.user.js` 程式碼，不讀取 `.storage.json`。
