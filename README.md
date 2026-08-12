@@ -6,8 +6,11 @@
 
 - [安裝戰鬥外觀與角色圖庫](https://raw.githubusercontent.com/szerra/mwi-szerra-suite/main/standalone/MWI-Szerra-Combat-Appearance.user.js)
 - [安裝食用工具（隊伍順序修正版）](https://raw.githubusercontent.com/szerra/mwi-szerra-suite/main/dist/MWI-Edible-Tools-TW.user.js)
+- [安裝 Profit Panel II（封包相容修正版）](https://raw.githubusercontent.com/szerra/mwi-szerra-suite/main/standalone/MWI-Profit-Panel-II-compat.user.js)
 
 Tampermonkey 會依各檔案的 `@updateURL` 自動檢查此儲存庫的最新版。舊的三個 Szerra 整合包仍保留供已安裝者使用，但不再列為建議架構。
+
+食用工具修正版與 Profit Panel II 相容修正版改用各自的 `WeakMap` 快取 WebSocket 訊息，不再重複定義 `MessageEvent.data`。這可避免與原作者 `MWITools` 同時啟用時出現 `Cannot redefine property: data`，讓裝備分數等需要角色初始化資料的功能正常載入。Profit Panel II 相容修正版與 Profit Panel II 原版不可同時啟用。
 
 ## 建議架構
 

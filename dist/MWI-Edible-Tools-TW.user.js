@@ -2,7 +2,7 @@
 // @name         MWI 食用工具（隊伍順序修正版）
 // @name:en      MWI Edible Tools - Party Order Fix
 // @namespace    http://tampermonkey.net/
-// @version      0.509.2
+// @version      0.509.3
 // @description  保留原版食用工具功能，修正多人戰鬥消耗品視窗的角色順序，使其與遊戲隊伍卡由左至右一致。
 // @description:en  Chest log, chest value, offline stats, guild XP, food monitor, drop tracking, enhancement stats
 // @author       Truth_Light
@@ -2227,11 +2227,15 @@
     function hookWS() {
         const dataProperty = Object.getOwnPropertyDescriptor(MessageEvent.prototype, "data");
         const oriGet = dataProperty.get;
+        const messageCache = new WeakMap();
 
         dataProperty.get = hookedGet;
         Object.defineProperty(MessageEvent.prototype, "data", dataProperty);
 
         function hookedGet() {
+            if (messageCache.has(this)) {
+                return messageCache.get(this);
+            }
             const socket = this.currentTarget;
             if (!(socket instanceof WebSocket)) {
                 return oriGet.call(this);
@@ -2242,9 +2246,9 @@
             lastWs = socket;
 
             const message = oriGet.call(this);
-            Object.defineProperty(this, "data", { value: message, configurable: true }); // Anti-loop
-
-            return handleMessage(message);
+            const handledMessage = handleMessage(message);
+            messageCache.set(this, handledMessage);
+            return handledMessage;
         }
     }
 
