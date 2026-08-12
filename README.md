@@ -5,6 +5,7 @@
 ## 安裝
 
 - [安裝戰鬥外觀與角色圖庫](https://raw.githubusercontent.com/szerra/mwi-szerra-suite/main/standalone/MWI-Szerra-Combat-Appearance.user.js)
+- [安裝戰鬥目標等級時間計算](https://raw.githubusercontent.com/szerra/mwi-szerra-suite/main/standalone/MWI-Combat-Level-Target.user.js)
 - [安裝食用工具（隊伍順序修正版）](https://raw.githubusercontent.com/szerra/mwi-szerra-suite/main/dist/MWI-Edible-Tools-TW.user.js)
 - [安裝 Profit Panel II（封包相容修正版）](https://raw.githubusercontent.com/szerra/mwi-szerra-suite/main/standalone/MWI-Profit-Panel-II-compat.user.js)
 
@@ -15,6 +16,7 @@ Tampermonkey 會依各檔案的 `@updateURL` 自動檢查此儲存庫的最新�
 ## 建議架構
 
 - 啟用「MWI 戰鬥外觀與角色圖庫」：只負責技能特效與自己／隊友的角色圖片。
+- 啟用「MWI 戰鬥目標等級時間計算」：可輸入未來目標等級，計算尚需經驗、總時間與預計達成日期。
 - 其他市場、角色資訊、戰鬥統計功能改裝原作者插件，避免每次作者更新都要重新打包整套。
 - 神龕模擬器改用模擬器儲存庫提供的獨立橋接器。
 - 公會資料插件保持原樣；本外觀包不會讀寫它的資料或設定。
@@ -72,7 +74,7 @@ Tampermonkey 會依各檔案的 `@updateURL` 自動檢查此儲存庫的最新�
 
 以下原作者腳本不再由新外觀包取代，是否啟用請依需求決定：
 
-- `[银河奶牛]显示战斗升级所需时间`
+- 原作者 `[银河奶牛]显示战斗升级所需时间` v1.4（若已安裝本儲存庫的目標等級版，兩者只能啟用一個）
 - `[MWI] Realtime Import Of Battle Simulation`
 - `[银河奶牛]康康运气_修复`
 - `MWI Battle HUD`
