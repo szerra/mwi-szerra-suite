@@ -3,7 +3,7 @@
 // @name:zh-TW   MWI 戰鬥目標等級時間計算
 // @name:zh-CN   MWI 战斗目标等级时间计算
 // @namespace    https://github.com/szerra/mwi-szerra-suite
-// @version      1.5.0-szerra.2
+// @version      1.5.0-szerra.3
 // @description  顯示戰鬥技能升到自訂目標等級所需時間
 // @description:zh-TW 顯示戰鬥技能升到自訂目標等級所需時間
 // @description:zh-CN 显示战斗技能升到自定义目标等级所需时间
@@ -22,6 +22,8 @@
 // @match        https://test.milkywayidlecn.com/*
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        unsafeWindow
+// @require      https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js
 // ==/UserScript==
 
 (function() {
@@ -31,6 +33,8 @@
     const TARGET_INPUT_ID = 'mwi-szerra-level-target-input';
     const TARGET_STORAGE_KEY = 'mwi.szerra.level-time.target.v1';
     const DEFAULT_TARGET_LEVEL = 140;
+    const TABLE_RETRY_INTERVAL_MS = 1000;
+    const TABLE_RETRY_LIMIT = 60;
 
     // 技能中英对照表
     const SKILL_MAP = {
@@ -61,6 +65,9 @@
     // 已处理的提示框列表，避免重复处理
     const processedTooltips = new WeakSet();
     let cachedLevelExperienceTable = null;
+    let levelExperienceTableRetryTimer = null;
+    let levelExperienceTableRetryCount = 0;
+    let nativeReadWarningShown = false;
 
     function getSavedTargetLevel() {
         try {
@@ -89,8 +96,45 @@
 
     function getLevelExperienceTable() {
         if (cachedLevelExperienceTable) return cachedLevelExperienceTable;
+
+        const rememberTable = (table) => {
+            if (!table || typeof table !== 'object') return null;
+            const usableLevels = Object.keys(table).filter((level) => (
+                Number.isInteger(Number(level))
+                && Number(level) > 1
+                && Number.isFinite(Number(table[level]))
+            ));
+            if (usableLevels.length === 0) return null;
+            cachedLevelExperienceTable = table;
+            return cachedLevelExperienceTable;
+        };
+
         try {
-            const raw = localStorage.getItem('initClientData');
+            const pageGlobal = typeof unsafeWindow !== 'undefined'
+                ? unsafeWindow
+                : globalThis;
+
+            // Prefer the game's own decoder. This keeps working if the game
+            // changes how initClientData is compressed in localStorage.
+            try {
+                const initData = pageGlobal.localStorageUtil
+                    ?.getInitClientData?.();
+                const nativeTable = rememberTable(
+                    initData?.levelExperienceTable
+                );
+                if (nativeTable) return nativeTable;
+            } catch (nativeReadError) {
+                if (!nativeReadWarningShown) {
+                    nativeReadWarningShown = true;
+                    console.debug(
+                        '[升級時間腳本] 遊戲資料尚未就緒，稍後重試:',
+                        nativeReadError
+                    );
+                }
+            }
+
+            const storage = pageGlobal.localStorage ?? localStorage;
+            const raw = storage?.getItem('initClientData');
             if (!raw) return null;
 
             let initData = null;
@@ -99,19 +143,34 @@
             } catch (_plainJsonError) {
                 const decompressor = typeof LZString !== 'undefined'
                     ? LZString
-                    : null;
+                    : pageGlobal.LZString;
                 const decompressed = decompressor?.decompressFromUTF16(raw);
                 if (decompressed) initData = JSON.parse(decompressed);
             }
 
-            const table = initData?.levelExperienceTable;
-            if (!table || typeof table !== 'object') return null;
-            cachedLevelExperienceTable = table;
-            return cachedLevelExperienceTable;
+            return rememberTable(initData?.levelExperienceTable);
         } catch (error) {
             console.log('[升級時間腳本] 讀取官方經驗表失敗:', error);
             return null;
         }
+    }
+
+    function startLevelExperienceTableRetry() {
+        if (getLevelExperienceTable()) return;
+        if (levelExperienceTableRetryTimer !== null) return;
+
+        levelExperienceTableRetryCount = 0;
+        levelExperienceTableRetryTimer = setInterval(() => {
+            levelExperienceTableRetryCount += 1;
+            const tableReady = Boolean(getLevelExperienceTable());
+            if (!tableReady && levelExperienceTableRetryCount < TABLE_RETRY_LIMIT) {
+                return;
+            }
+
+            clearInterval(levelExperienceTableRetryTimer);
+            levelExperienceTableRetryTimer = null;
+            if (tableReady) refreshVisibleTooltips();
+        }, TABLE_RETRY_INTERVAL_MS);
     }
 
     function currentTargetLevel() {
@@ -410,6 +469,7 @@
             const upgradeTimeStr = formatUpgradeTime(remainingSec);
             const targetLevel = currentTargetLevel();
             const levelExperienceTable = getLevelExperienceTable();
+            if (!levelExperienceTable) startLevelExperienceTableRetry();
             const targetProgress = calculateTargetProgress(
                 levelExperienceTable,
                 currentLevel,
@@ -459,6 +519,7 @@
 
     // 初始化脚本
     function initScript() {
+        startLevelExperienceTableRetry();
         ensureTargetLevelControl();
 
         // 使用MutationObserver监听DOM变化

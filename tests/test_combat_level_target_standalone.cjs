@@ -20,7 +20,7 @@ assert.match(source, /@name\s+MWI 戰鬥目標等級時間計算/);
 assert.match(source, /@name:zh-TW\s+MWI 戰鬥目標等級時間計算/);
 assert.match(source, /@name:zh-CN\s+MWI 战斗目标等级时间计算/);
 assert.match(source, /@namespace\s+https:\/\/github\.com\/szerra\/mwi-szerra-suite/);
-assert.match(source, /@version\s+1\.5\.0-szerra\.2/);
+assert.match(source, /@version\s+1\.5\.0-szerra\.3/);
 assert.match(source, /@author\s+.*DOUBAO-DiamondMoo.*Szerra/);
 assert.match(source, /@homepageURL\s+https:\/\/github\.com\/szerra\/mwi-szerra-suite/);
 assert.match(source, /@supportURL\s+https:\/\/github\.com\/szerra\/mwi-szerra-suite\/issues/);
@@ -44,30 +44,65 @@ for (const match of [
 }
 assert.match(source, /@grant\s+GM_getValue/);
 assert.match(source, /@grant\s+GM_setValue/);
+assert.match(source, /@grant\s+unsafeWindow/);
+assert.match(
+    source,
+    /@require\s+https:\/\/cdn\.jsdelivr\.net\/npm\/lz-string@1\.5\.0\/libs\/lz-string\.min\.js/
+);
 
 source = source.replace(
     /\}\)\(\);\s*$/,
     [
         "globalThis.__levelTargetTest = {",
         "calculateTargetProgress,",
-        "formatSeconds",
+        "formatSeconds,",
+        "getLevelExperienceTable,",
+        "startLevelExperienceTableRetry,",
+        "refreshVisibleTooltips,",
+        "TABLE_RETRY_INTERVAL_MS,",
+        "TABLE_RETRY_LIMIT",
         "};",
         "})();",
     ].join("\n")
 );
 
+const experienceTable = [0, 0, 100, 300, 700];
 const context = {
     console,
+    unsafeWindow: {
+        localStorage: {
+            getItem(key) {
+                return key === "initClientData" ? "compressed-cache" : null;
+            },
+        },
+        localStorageUtil: {
+            getInitClientData() {
+                return { levelExperienceTable: experienceTable };
+            },
+        },
+    },
     document: {
         readyState: "loading",
         addEventListener() {},
+        querySelectorAll() {
+            return [];
+        },
     },
 };
 vm.runInNewContext(source, context, { filename: scriptPath });
 
-const { calculateTargetProgress, formatSeconds } =
+const {
+    calculateTargetProgress,
+    formatSeconds,
+    getLevelExperienceTable,
+} =
     context.__levelTargetTest;
-const experienceTable = [0, 0, 100, 300, 700];
+
+assert.equal(
+    getLevelExperienceTable(),
+    experienceTable,
+    "must read the official table through the game's native cache decoder"
+);
 
 assert.deepEqual(
     { ...calculateTargetProgress(experienceTable, 2, 50, 4, 3600) },
@@ -91,3 +126,138 @@ assert.match(source, /"攻擊": "\/skills\/attack"/);
 assert.match(source, /"遠程": "\/skills\/ranged"/);
 
 console.log("PASS standalone combat target-level calculator");
+
+function loadRetryHarness() {
+    let retrySource = fs.readFileSync(scriptPath, "utf8");
+    retrySource = retrySource.replace(
+        /function refreshVisibleTooltips\(\) \{[\s\S]*?\n    \}\n\n    function ensureTargetLevelControl/,
+        [
+            "function refreshVisibleTooltips() {",
+            "    globalThis.__refreshVisibleTooltipsCount =",
+            "        (globalThis.__refreshVisibleTooltipsCount || 0) + 1;",
+            "}",
+            "",
+            "    function ensureTargetLevelControl",
+        ].join("\n")
+    );
+    retrySource = retrySource.replace(
+        /\}\)\(\);\s*$/,
+        [
+            "globalThis.__levelRetryTest = {",
+            "startLevelExperienceTableRetry,",
+            "TABLE_RETRY_INTERVAL_MS,",
+            "TABLE_RETRY_LIMIT",
+            "};",
+            "})();",
+        ].join("\n")
+    );
+
+    let ready = false;
+    let visibleTooltipRefreshQueries = 0;
+    const intervalCallbacks = [];
+    const clearedIntervals = [];
+    const retryContext = {
+        console,
+        unsafeWindow: {
+            localStorage: {
+                getItem() {
+                    return "compressed-cache";
+                },
+            },
+            localStorageUtil: {
+                getInitClientData() {
+                    return ready
+                        ? { levelExperienceTable: experienceTable }
+                        : { levelExperienceTable: {} };
+                },
+            },
+        },
+        setInterval(callback) {
+            intervalCallbacks.push(callback);
+            return intervalCallbacks.length;
+        },
+        clearInterval(id) {
+            clearedIntervals.push(id);
+        },
+        document: {
+            readyState: "loading",
+            addEventListener() {},
+            querySelectorAll() {
+                visibleTooltipRefreshQueries += 1;
+                return [];
+            },
+        },
+    };
+    vm.runInNewContext(retrySource, retryContext, { filename: scriptPath });
+    return {
+        retryContext,
+        intervalCallbacks,
+        clearedIntervals,
+        makeReady() {
+            ready = true;
+        },
+        getVisibleTooltipRefreshQueries() {
+            return visibleTooltipRefreshQueries;
+        },
+    };
+}
+
+const retryHarness = loadRetryHarness();
+retryHarness.retryContext.__levelRetryTest.startLevelExperienceTableRetry();
+assert.equal(retryHarness.intervalCallbacks.length, 1);
+assert.equal(
+    retryHarness.retryContext.__levelRetryTest.TABLE_RETRY_INTERVAL_MS,
+    1000
+);
+assert.equal(retryHarness.retryContext.__levelRetryTest.TABLE_RETRY_LIMIT, 60);
+retryHarness.makeReady();
+retryHarness.intervalCallbacks[0]();
+assert.deepEqual(retryHarness.clearedIntervals, [1]);
+assert.equal(retryHarness.getVisibleTooltipRefreshQueries(), 1);
+
+console.log("PASS delayed official experience table recovery");
+
+function loadFallbackHarness() {
+    let fallbackSource = fs.readFileSync(scriptPath, "utf8");
+    fallbackSource = fallbackSource.replace(
+        /\}\)\(\);\s*$/,
+        [
+            "globalThis.__levelFallbackTest = {",
+            "getLevelExperienceTable",
+            "};",
+            "})();",
+        ].join("\n")
+    );
+
+    const fallbackContext = {
+        console,
+        unsafeWindow: {
+            localStorage: {
+                getItem() {
+                    return "compressed-cache";
+                },
+            },
+        },
+        LZString: {
+            decompressFromUTF16(value) {
+                assert.equal(value, "compressed-cache");
+                return JSON.stringify({ levelExperienceTable: experienceTable });
+            },
+        },
+        document: {
+            readyState: "loading",
+            addEventListener() {},
+        },
+    };
+    vm.runInNewContext(fallbackSource, fallbackContext, { filename: scriptPath });
+    return fallbackContext.__levelFallbackTest.getLevelExperienceTable();
+}
+
+assert.deepEqual(
+    Array.from(loadFallbackHarness()),
+    Array.from(experienceTable),
+    "must decode the compressed cache when the native game decoder is absent"
+);
+assert.match(source, /usableLevels\.length === 0/);
+
+console.log("PASS compressed cache fallback and table validation");
